@@ -77,23 +77,50 @@ class BTFProcessor:
     def get_image_info(self, file_path: Path) -> Tuple[int, int, int, str]:
         """Extract image dimensions and channel information."""
         try:
-            with tifffile.TiffFile(file_path) as tif:
-                img = tif.series[0]
+            # Suppress OME warnings for corrupted metadata
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
                 
-                if 'S' in img.axes:  # RGB (YXS axes)
-                    num_channels = img.shape[img.axes.index('S')]
-                    height, width = img.shape[img.axes.index('Y')], img.shape[img.axes.index('X')]
-                    axes = 'YXS'
-                elif 'C' in img.axes:  # CYX format
-                    num_channels = img.shape[img.axes.index('C')]
-                    height, width = img.shape[img.axes.index('Y')], img.shape[img.axes.index('X')]
-                    axes = 'CYX'
-                else:  # Grayscale
-                    num_channels = 1
-                    height, width = img.shape[-2], img.shape[-1]
-                    axes = 'YX'
-                    
-                return height, width, num_channels, axes
+                with tifffile.TiffFile(file_path) as tif:
+                    # Try to get info from series first
+                    try:
+                        img = tif.series[0]
+                        
+                        if 'S' in img.axes:  # RGB (YXS axes)
+                            num_channels = img.shape[img.axes.index('S')]
+                            height, width = img.shape[img.axes.index('Y')], img.shape[img.axes.index('X')]
+                            axes = 'YXS'
+                        elif 'C' in img.axes:  # CYX format
+                            num_channels = img.shape[img.axes.index('C')]
+                            height, width = img.shape[img.axes.index('Y')], img.shape[img.axes.index('X')]
+                            axes = 'CYX'
+                        else:  # Grayscale
+                            num_channels = 1
+                            height, width = img.shape[-2], img.shape[-1]
+                            axes = 'YX'
+                            
+                        return height, width, num_channels, axes
+                        
+                    except Exception as series_error:
+                        # Fallback: read from first page directly
+                        self.logger.warning(f"Series reading failed, using direct page reading: {series_error}")
+                        page = tif.pages[0]
+                        page_data = page.asarray()
+                        
+                        if len(page_data.shape) == 3:  # RGB format
+                            height, width, num_channels = page_data.shape
+                            axes = 'YXS'
+                        elif len(page_data.shape) == 2:  # Grayscale
+                            height, width = page_data.shape
+                            num_channels = 1
+                            axes = 'YX'
+                        else:  # Unexpected format
+                            height, width = page_data.shape[-2], page_data.shape[-1]
+                            num_channels = 1
+                            axes = 'YX'
+                            
+                        return height, width, num_channels, axes
                 
         except Exception as e:
             self.logger.error(f"Error reading image info from {file_path}: {e}")
@@ -205,24 +232,59 @@ class BTFProcessor:
     def extract_tile(self, file_path: Path, y: int, x: int, h: int, w: int, 
                     green_channel: int, num_channels: int, axes: str) -> np.ndarray:
         """Extract a single tile from the BTF file."""
-        with tifffile.TiffFile(file_path) as tif:
-            img = tif.series[0]
+        try:
+            # Try the memory-efficient approach first
+            with tifffile.TiffFile(file_path) as tif:
+                img = tif.series[0]
+                
+                # Use memory-efficient key-based slicing to avoid loading entire image
+                if axes == 'YXS':  # RGB format
+                    tile_region = img.asarray(
+                        key=(slice(y, y+h), slice(x, x+w), slice(None))
+                    )
+                    return tile_region[:, :, green_channel]
+                elif axes == 'CYX':  # Channel first format
+                    tile_region = img.asarray(
+                        key=(slice(None), slice(y, y+h), slice(x, x+w))
+                    )
+                    return tile_region[green_channel, :, :]
+                else:  # Grayscale
+                    return img.asarray(
+                        key=(slice(y, y+h), slice(x, x+w))
+                    )
+        except Exception as e:
+            # Fallback: use direct page reading for corrupted OME files
+            self.logger.warning(f"Key-based slicing failed, using direct page reading: {e}")
+            return self._extract_tile_direct_pages(file_path, y, x, h, w, green_channel, num_channels, axes)
+    
+    def _extract_tile_direct_pages(self, file_path: Path, y: int, x: int, h: int, w: int, 
+                                  green_channel: int, num_channels: int, axes: str) -> np.ndarray:
+        """Extract tile using direct page reading for corrupted OME files."""
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
             
-            # Use memory-efficient key-based slicing to avoid loading entire image
-            if axes == 'YXS':  # RGB format
-                tile_region = img.asarray(
-                    key=(slice(y, y+h), slice(x, x+w), slice(None))
-                )
-                return tile_region[:, :, green_channel]
-            elif axes == 'CYX':  # Channel first format
-                tile_region = img.asarray(
-                    key=(slice(None), slice(y, y+h), slice(x, x+w))
-                )
-                return tile_region[green_channel, :, :]
-            else:  # Grayscale
-                return img.asarray(
-                    key=(slice(y, y+h), slice(x, x+w))
-                )
+            with tifffile.TiffFile(file_path) as tif:
+                # Read the first page to get basic info
+                page = tif.pages[0]
+                page_data = page.asarray()
+                
+                # Calculate which pages we need to read
+                if axes == 'YXS':  # RGB format - single page with all channels
+                    # Extract the tile region and green channel
+                    tile_region = page_data[y:y+h, x:x+w, :]
+                    return tile_region[:, :, green_channel]
+                elif axes == 'CYX':  # Channel first format - multiple pages
+                    # For CYX format, we need to read the specific channel page
+                    if green_channel < len(tif.pages):
+                        channel_page = tif.pages[green_channel]
+                        channel_data = channel_page.asarray()
+                        return channel_data[y:y+h, x:x+w]
+                    else:
+                        # Fallback: read first page and assume it's the green channel
+                        return page_data[y:y+h, x:x+w]
+                else:  # Grayscale
+                    return page_data[y:y+h, x:x+w]
                 
     def create_tile_filename(self, file_path: Path, tile_idx: int, y: int, x: int, 
                            h: int, w: int) -> str:
