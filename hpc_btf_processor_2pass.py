@@ -162,7 +162,7 @@ class TwoPassBTFProcessor:
                 self.logger.info(f"Size reduction: {reduction_percent:.1f}% "
                                f"({original_size / (1024**3):.2f} GB → {green_size / (1024**3):.2f} GB)")
                 
-                # Save green channel as new TIFF file
+                # Save green channel as new TIFF file (without OME metadata)
                 self.logger.info(f"Saving green channel to {green_file_path}")
                 self.log_memory_usage("PASS1_SAVING_GREEN")
                 
@@ -171,7 +171,8 @@ class TwoPassBTFProcessor:
                     green_file_path, 
                     green_channel, 
                     photometric='minisblack', 
-                    compression='zlib'
+                    compression='zlib',
+                    metadata=None  # Remove all metadata to avoid OME corruption
                 )
                 save_time = time.time() - save_start
                 
@@ -234,9 +235,16 @@ class TwoPassBTFProcessor:
                             # Read tile from green file (much more memory efficient)
                             with tifffile.TiffFile(green_file_path) as tif:
                                 img = tif.series[0]
-                                tile_data = img.asarray(
-                                    key=(slice(y, y+tile_h), slice(x, x+tile_w))
-                                )
+                                try:
+                                    # Try key-based slicing first
+                                    tile_data = img.asarray(
+                                        key=(slice(y, y+tile_h), slice(x, x+tile_w))
+                                    )
+                                except Exception as slicing_error:
+                                    # Fallback: read entire image and slice (memory intensive but works)
+                                    self.logger.warning(f"Key-based slicing failed, using direct array slicing: {slicing_error}")
+                                    full_image = img.asarray()
+                                    tile_data = full_image[y:y+tile_h, x:x+tile_w]
                             
                             # Save tile
                             tile_filename = f"{file_stem}_green_tile_{tile_idx:04d}_{y}_{x}_{tile_h}x{tile_w}.tif"
