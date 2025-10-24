@@ -1,0 +1,41 @@
+# Logging Configuration for BTF Processing
+# ========================================
+
+# Log levels: DEBUG, INFO, WARNING, ERROR, CRITICAL
+log_level: "INFO"
+
+# Log file settings
+log_file: "btf_processing_detailed.log"
+max_log_size_mb: 100
+backup_count: 5
+
+# Memory monitoring
+memory_monitoring:
+  enabled: true
+  log_interval_seconds: 30
+  log_memory_at_stages: true
+
+# File size tracking
+file_size_tracking:
+  enabled: true
+  log_at_stages: true
+  track_intermediate_files: true
+
+# Performance monitoring
+performance_monitoring:
+  enabled: true
+  log_timing: true
+  log_progress_intervals: 100  # Log every N tiles
+
+# Detailed logging options
+detailed_logging:
+  log_image_properties: true
+  log_memory_usage: true
+  log_file_sizes: true
+  log_processing_times: true
+  log_tile_statistics: true
+  log_size_reductions: true
+
+# Output formatting
+log_format: "%(asctime)s - %(name)s - %(levelname)s - [%(funcName)s:%(lineno)d] - %(message)s"
+date_format: "%Y-%m-%d %H:%M:%S"

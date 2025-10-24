@@ -16,8 +16,10 @@ import logging
 import os
 import sys
 import time
+import psutil
+import shutil
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 import yaml
 import tifffile
 import numpy as np
@@ -63,6 +65,36 @@ class TwoPassBTFProcessor:
         
         self.logger.info(f"Configuration validated successfully")
         
+    def get_file_size_mb(self, file_path: Path) -> float:
+        """Get file size in MB."""
+        return file_path.stat().st_size / (1024 * 1024)
+    
+    def get_memory_usage_mb(self) -> Dict[str, float]:
+        """Get current memory usage in MB."""
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        return {
+            'rss_mb': memory_info.rss / (1024 * 1024),  # Resident Set Size
+            'vms_mb': memory_info.vms / (1024 * 1024),  # Virtual Memory Size
+            'percent': process.memory_percent()
+        }
+    
+    def log_memory_usage(self, stage: str):
+        """Log current memory usage."""
+        memory = self.get_memory_usage_mb()
+        self.logger.info(f"[{stage}] Memory usage: RSS={memory['rss_mb']:.1f}MB, "
+                        f"VMS={memory['vms_mb']:.1f}MB, Percent={memory['percent']:.1f}%")
+        
+    def log_file_sizes(self, files: Dict[str, Path], stage: str):
+        """Log file sizes for tracking."""
+        self.logger.info(f"[{stage}] File sizes:")
+        for name, path in files.items():
+            if path.exists():
+                size_mb = self.get_file_size_mb(path)
+                self.logger.info(f"  {name}: {size_mb:.2f} MB ({path.name})")
+            else:
+                self.logger.info(f"  {name}: File not found ({path.name})")
+        
     def get_btf_files(self) -> List[Path]:
         """Get list of BTF files to process."""
         input_dir = Path(self.config['input_dir'])
@@ -78,6 +110,10 @@ class TwoPassBTFProcessor:
         """Extract green channel to a new file (Pass 1)."""
         self.logger.info(f"Pass 1: Extracting green channel from {file_path.name}")
         
+        # Log initial memory and file sizes
+        self.log_memory_usage("PASS1_START")
+        self.log_file_sizes({"Original BTF": file_path}, "PASS1_START")
+        
         # Create output path for green channel file
         green_file_path = Path(self.config['output_dir']) / f"{file_path.stem}_green.tif"
         
@@ -88,25 +124,66 @@ class TwoPassBTFProcessor:
                 
                 # Read the entire image (memory intensive but necessary for corrupted OME)
                 self.logger.warning("Reading entire image to extract green channel...")
+                self.log_memory_usage("PASS1_READING_IMAGE")
+                
+                start_time = time.time()
                 full_image = tifffile.imread(file_path, key=0)
+                read_time = time.time() - start_time
+                
+                self.logger.info(f"Image read completed in {read_time:.2f} seconds")
+                self.log_memory_usage("PASS1_IMAGE_LOADED")
+                
+                # Log image properties
+                self.logger.info(f"Original image properties:")
+                self.logger.info(f"  Shape: {full_image.shape}")
+                self.logger.info(f"  Data type: {full_image.dtype}")
+                self.logger.info(f"  Memory size: {full_image.nbytes / (1024**3):.2f} GB")
                 
                 # Extract green channel
+                self.logger.info(f"Extracting green channel (index {self.config['green_channel']})...")
                 if len(full_image.shape) == 3:
                     green_channel = full_image[:, :, self.config['green_channel']]
+                    self.logger.info(f"Green channel extracted from RGB image")
                 else:
                     # Single channel, use as is
                     green_channel = full_image
+                    self.logger.info(f"Single channel image, using as green channel")
+                
+                # Log green channel properties
+                self.logger.info(f"Green channel properties:")
+                self.logger.info(f"  Shape: {green_channel.shape}")
+                self.logger.info(f"  Data type: {green_channel.dtype}")
+                self.logger.info(f"  Memory size: {green_channel.nbytes / (1024**3):.2f} GB")
+                
+                # Calculate size reduction
+                original_size = full_image.nbytes
+                green_size = green_channel.nbytes
+                reduction_percent = ((original_size - green_size) / original_size) * 100
+                self.logger.info(f"Size reduction: {reduction_percent:.1f}% "
+                               f"({original_size / (1024**3):.2f} GB → {green_size / (1024**3):.2f} GB)")
                 
                 # Save green channel as new TIFF file
                 self.logger.info(f"Saving green channel to {green_file_path}")
+                self.log_memory_usage("PASS1_SAVING_GREEN")
+                
+                save_start = time.time()
                 tifffile.imwrite(
                     green_file_path, 
                     green_channel, 
                     photometric='minisblack', 
                     compression='zlib'
                 )
+                save_time = time.time() - save_start
                 
-                self.logger.info(f"Green channel extracted: {green_channel.shape}")
+                self.logger.info(f"Green channel saved in {save_time:.2f} seconds")
+                self.log_memory_usage("PASS1_GREEN_SAVED")
+                
+                # Log final file sizes
+                self.log_file_sizes({
+                    "Original BTF": file_path,
+                    "Green Channel": green_file_path
+                }, "PASS1_COMPLETE")
+                
                 return green_file_path
                 
         except Exception as e:
@@ -116,6 +193,10 @@ class TwoPassBTFProcessor:
     def tile_green_file(self, green_file_path: Path, original_file_path: Path) -> dict:
         """Tile the green channel file (Pass 2)."""
         self.logger.info(f"Pass 2: Tiling green channel file {green_file_path.name}")
+        
+        # Log initial memory and file sizes
+        self.log_memory_usage("PASS2_START")
+        self.log_file_sizes({"Green Channel": green_file_path}, "PASS2_START")
         
         try:
             # Get image dimensions
@@ -135,9 +216,13 @@ class TwoPassBTFProcessor:
             total_tiles = ((height + tile_size - 1) // tile_size) * ((width + tile_size - 1) // tile_size)
             
             self.logger.info(f"Creating {total_tiles} tiles of size {tile_size}x{tile_size}")
+            self.logger.info(f"Tile grid: {((height + tile_size - 1) // tile_size)} rows x {((width + tile_size - 1) // tile_size)} cols")
             
             tile_info = []
             tile_idx = 0
+            total_tile_size_mb = 0
+            
+            start_time = time.time()
             
             with tqdm(total=total_tiles, desc=f"Tiling {green_file_path.name}") as pbar:
                 for y in range(0, height, tile_size):
@@ -164,22 +249,51 @@ class TwoPassBTFProcessor:
                                 compression='zlib'
                             )
                             
+                            # Track tile size
+                            tile_size_mb = self.get_file_size_mb(tile_path)
+                            total_tile_size_mb += tile_size_mb
+                            
                             # Record tile information
                             tile_info.append({
                                 'tile_id': tile_idx,
                                 'filename': tile_filename,
                                 'position': (y, x),
                                 'size': (tile_h, tile_w),
-                                'file_path': str(tile_path)
+                                'file_path': str(tile_path),
+                                'file_size_mb': tile_size_mb
                             })
                             
                             tile_idx += 1
+                            
+                            # Log progress every 100 tiles
+                            if tile_idx % 100 == 0:
+                                self.log_memory_usage(f"PASS2_TILE_{tile_idx}")
+                                avg_tile_size = total_tile_size_mb / tile_idx
+                                self.logger.info(f"Processed {tile_idx}/{total_tiles} tiles, "
+                                              f"avg tile size: {avg_tile_size:.2f} MB")
                             
                         except Exception as e:
                             self.logger.error(f"Error processing tile at ({y},{x}): {e}")
                             continue
                         
                         pbar.update(1)
+            
+            tiling_time = time.time() - start_time
+            
+            # Log final statistics
+            self.logger.info(f"Tiling completed in {tiling_time:.2f} seconds")
+            self.logger.info(f"Average time per tile: {tiling_time/tile_idx:.3f} seconds")
+            self.logger.info(f"Total tiles created: {tile_idx}")
+            self.logger.info(f"Total tile size: {total_tile_size_mb:.2f} MB")
+            self.logger.info(f"Average tile size: {total_tile_size_mb/tile_idx:.2f} MB")
+            
+            self.log_memory_usage("PASS2_COMPLETE")
+            
+            # Log final file sizes
+            self.log_file_sizes({
+                "Green Channel": green_file_path,
+                "Tiles Directory": tiles_dir
+            }, "PASS2_COMPLETE")
             
             # Save metadata
             metadata = {
@@ -189,6 +303,9 @@ class TwoPassBTFProcessor:
                 'green_channel': self.config['green_channel'],
                 'tile_size': tile_size,
                 'total_tiles': tile_idx,
+                'total_tile_size_mb': total_tile_size_mb,
+                'average_tile_size_mb': total_tile_size_mb / tile_idx,
+                'tiling_time_seconds': tiling_time,
                 'processing_time': time.time(),
                 'timestamp': datetime.now().isoformat(),
                 'tiles': tile_info
@@ -210,19 +327,47 @@ class TwoPassBTFProcessor:
         start_time = time.time()
         self.logger.info(f"Processing file: {file_path.name}")
         
+        # Log initial file size
+        original_size_mb = self.get_file_size_mb(file_path)
+        self.logger.info(f"Original BTF file size: {original_size_mb:.2f} MB")
+        
         try:
             # Pass 1: Extract green channel
             green_file_path = self.extract_green_channel(file_path)
+            green_size_mb = self.get_file_size_mb(green_file_path)
             
             # Pass 2: Tile the green channel file
             metadata = self.tile_green_file(green_file_path, file_path)
+            
+            # Calculate final statistics
+            total_tiles = metadata['total_tiles']
+            total_tile_size_mb = metadata['total_tile_size_mb']
+            avg_tile_size_mb = metadata['average_tile_size_mb']
+            
+            # Log comprehensive summary
+            self.logger.info("=" * 60)
+            self.logger.info("PROCESSING SUMMARY")
+            self.logger.info("=" * 60)
+            self.logger.info(f"Original BTF file: {original_size_mb:.2f} MB")
+            self.logger.info(f"Green channel file: {green_size_mb:.2f} MB")
+            self.logger.info(f"Total tiles created: {total_tiles}")
+            self.logger.info(f"Total tile size: {total_tile_size_mb:.2f} MB")
+            self.logger.info(f"Average tile size: {avg_tile_size_mb:.2f} MB")
+            self.logger.info(f"Size reduction (BTF → Green): {((original_size_mb - green_size_mb) / original_size_mb) * 100:.1f}%")
+            self.logger.info(f"Size reduction (BTF → Tiles): {((original_size_mb - total_tile_size_mb) / original_size_mb) * 100:.1f}%")
+            self.logger.info(f"Processing time: {time.time() - start_time:.2f} seconds")
+            self.logger.info("=" * 60)
             
             # Clean up intermediate green file if requested
             if self.config.get('cleanup_intermediate', True):
                 self.logger.info(f"Cleaning up intermediate file: {green_file_path}")
                 green_file_path.unlink()
+                self.logger.info("Intermediate green channel file removed")
             
             metadata['total_processing_time'] = time.time() - start_time
+            metadata['original_file_size_mb'] = original_size_mb
+            metadata['green_file_size_mb'] = green_size_mb
+            
             self.logger.info(f"Successfully processed {file_path.name} in {metadata['total_processing_time']:.2f} seconds")
             return metadata
             

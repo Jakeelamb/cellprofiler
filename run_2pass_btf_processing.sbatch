@@ -75,6 +75,11 @@ fi
 
 echo "Found $BTF_COUNT BTF files to process"
 
+# Start memory monitoring in background
+echo "Starting memory monitoring..."
+uv run python monitor_memory.py --process-name hpc_btf_processor_2pass.py --log-file memory_monitor.log &
+MONITOR_PID=$!
+
 # Run the two-pass processing pipeline
 echo "Starting two-pass BTF processing pipeline..."
 uv run python hpc_btf_processor_2pass.py \
@@ -84,6 +89,10 @@ uv run python hpc_btf_processor_2pass.py \
     --green-channel "$GREEN_CHANNEL" \
     --log-level "$LOG_LEVEL" \
     --cleanup-intermediate "$CLEANUP_INTERMEDIATE"
+
+# Stop memory monitoring
+echo "Stopping memory monitoring..."
+kill $MONITOR_PID 2>/dev/null || true
 
 # Check exit status
 if [ $? -eq 0 ]; then

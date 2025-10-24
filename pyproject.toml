@@ -10,4 +10,5 @@ dependencies = [
     "tifffile>=2025.10.16",
     "tqdm>=4.66.0",
     "PyYAML>=6.0",
+    "psutil>=5.9.0",
 ]
