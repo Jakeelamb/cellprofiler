@@ -208,15 +208,21 @@ class BTFProcessor:
         with tifffile.TiffFile(file_path) as tif:
             img = tif.series[0]
             
-            # Read the full tile region first, then extract channel
+            # Use memory-efficient key-based slicing to avoid loading entire image
             if axes == 'YXS':  # RGB format
-                tile_region = img.asarray()[y:y+h, x:x+w, :]
+                tile_region = img.asarray(
+                    key=(slice(y, y+h), slice(x, x+w), slice(None))
+                )
                 return tile_region[:, :, green_channel]
             elif axes == 'CYX':  # Channel first format
-                tile_region = img.asarray()[:, y:y+h, x:x+w]
+                tile_region = img.asarray(
+                    key=(slice(None), slice(y, y+h), slice(x, x+w))
+                )
                 return tile_region[green_channel, :, :]
             else:  # Grayscale
-                return img.asarray()[y:y+h, x:x+w]
+                return img.asarray(
+                    key=(slice(y, y+h), slice(x, x+w))
+                )
                 
     def create_tile_filename(self, file_path: Path, tile_idx: int, y: int, x: int, 
                            h: int, w: int) -> str:

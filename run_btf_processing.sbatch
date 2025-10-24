@@ -21,10 +21,14 @@ echo "Memory: $SLURM_MEM_PER_NODE MB"
 echo "Start time: $(date)"
 echo "=========================================="
 
-# Set up environment
-module purge
-module load python/3.12
-module load gcc/11.2.0
+# Set up environment (if modules are available)
+if command -v module &> /dev/null; then
+    module purge
+    module load python/3.12
+    module load gcc/11.2.0
+else
+    echo "Module system not available, using system Python"
+fi
 
 # Install UV if not available
 if ! command -v uv &> /dev/null; then
@@ -34,7 +38,7 @@ if ! command -v uv &> /dev/null; then
 fi
 
 # Set up working directory
-WORK_DIR="/home/$USER/Projects/cellprofiler_test"
+WORK_DIR="/home/$USER/cellprofiler"
 cd "$WORK_DIR"
 
 # Install dependencies with UV
