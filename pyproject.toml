@@ -1,7 +1,7 @@
 [project]
-name = "cellprofiler-test"
-version = "0.1.0"
-description = "Add your description here"
+name = "btf-hpc-processor"
+version = "1.0.0"
+description = "HPC pipeline for processing large BTF files with green channel extraction and tiling for CellProfiler analysis"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -9,9 +9,5 @@ dependencies = [
     "numpy>=2.3.4",
     "tifffile>=2025.10.16",
     "tqdm>=4.66.0",
-    "opencv-python>=4.8.0",
-    "Pillow>=10.0.0",
-    "dask>=2023.0.0",
-    "dask-image>=2023.0.0",
     "PyYAML>=6.0",
 ]

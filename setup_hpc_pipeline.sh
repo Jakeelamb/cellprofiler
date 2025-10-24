@@ -54,13 +54,14 @@ else
     SLURM_AVAILABLE=false
 fi
 
-# Install Python dependencies
-echo "Installing Python dependencies..."
-if command -v pip3 &> /dev/null; then
-    pip3 install --user imagecodecs numpy tifffile tqdm PyYAML
-    echo "✅ Dependencies installed"
+# Install Python dependencies with UV
+echo "Installing Python dependencies with UV..."
+if command -v uv &> /dev/null; then
+    uv sync
+    echo "✅ Dependencies installed with UV"
 else
-    echo "❌ pip3 not found. Please install pip"
+    echo "❌ UV not found. Please install UV first:"
+    echo "   curl -LsSf https://astral.sh/uv/install.sh | sh"
     exit 1
 fi
 
