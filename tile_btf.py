@@ -40,14 +40,10 @@ with tifffile.TiffFile(file_path) as tif:
                     # Read only the specific tile region from the file
                     if num_channels > 1:
                         # For YXS format: read the tile region and extract green channel
-                        tile_region = img.asarray(
-                            key=(slice(y, y+tile_h), slice(x, x+tile_w), slice(None))
-                        )
+                        tile_region = img.asarray()[y:y+tile_h, x:x+tile_w, :]
                         tile_data = tile_region[:, :, green_channel]
                     else:
-                        tile_data = img.asarray(
-                            key=(slice(y, y+tile_h), slice(x, x+tile_w))
-                        )
+                        tile_data = img.asarray()[y:y+tile_h, x:x+tile_w]
 
                     # Save as TIFF
                     output_file = os.path.join(output_dir, f'Process_374_green_tile_{tile_idx:04d}_{y}_{x}.tif')

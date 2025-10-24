@@ -17,6 +17,7 @@ dependencies = [
     { name = "numpy" },
     { name = "opencv-python" },
     { name = "pillow" },
+    { name = "pyyaml" },
     { name = "tifffile" },
     { name = "tqdm" },
 ]
@@ -29,6 +30,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.3.4" },
     { name = "opencv-python", specifier = ">=4.8.0" },
     { name = "pillow", specifier = ">=10.0.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "tifffile", specifier = ">=2025.10.16" },
     { name = "tqdm", specifier = ">=4.66.0" },
 ]
