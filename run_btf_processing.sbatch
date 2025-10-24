@@ -2,7 +2,6 @@
 #SBATCH --job-name=btf_processor
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --mail-type=ALL
 #SBATCH -N 1
 #SBATCH -o btf_processing_%j.out
 #SBATCH -e btf_processing_%j.err
