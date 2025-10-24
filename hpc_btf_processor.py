@@ -232,6 +232,11 @@ class BTFProcessor:
     def extract_tile(self, file_path: Path, y: int, x: int, h: int, w: int, 
                     green_channel: int, num_channels: int, axes: str) -> np.ndarray:
         """Extract a single tile from the BTF file."""
+        # Check if we should use the corrupted file workaround
+        if self.config.get('corrupted_ome_workaround', False):
+            self.logger.info("Using corrupted OME workaround - reading entire image")
+            return self._extract_tile_corrupted_workaround(file_path, y, x, h, w, green_channel, num_channels, axes)
+        
         try:
             # Try the memory-efficient approach first
             with tifffile.TiffFile(file_path) as tif:
@@ -264,27 +269,87 @@ class BTFProcessor:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             
-            with tifffile.TiffFile(file_path) as tif:
-                # Read the first page to get basic info
-                page = tif.pages[0]
-                page_data = page.asarray()
-                
-                # Calculate which pages we need to read
-                if axes == 'YXS':  # RGB format - single page with all channels
-                    # Extract the tile region and green channel
-                    tile_region = page_data[y:y+h, x:x+w, :]
-                    return tile_region[:, :, green_channel]
-                elif axes == 'CYX':  # Channel first format - multiple pages
-                    # For CYX format, we need to read the specific channel page
-                    if green_channel < len(tif.pages):
-                        channel_page = tif.pages[green_channel]
-                        channel_data = channel_page.asarray()
-                        return channel_data[y:y+h, x:x+w]
-                    else:
-                        # Fallback: read first page and assume it's the green channel
+            try:
+                with tifffile.TiffFile(file_path) as tif:
+                    # Read the first page to get basic info
+                    page = tif.pages[0]
+                    page_data = page.asarray()
+                    
+                    # Calculate which pages we need to read
+                    if axes == 'YXS':  # RGB format - single page with all channels
+                        # Extract the tile region and green channel
+                        tile_region = page_data[y:y+h, x:x+w, :]
+                        return tile_region[:, :, green_channel]
+                    elif axes == 'CYX':  # Channel first format - multiple pages
+                        # For CYX format, we need to read the specific channel page
+                        if green_channel < len(tif.pages):
+                            channel_page = tif.pages[green_channel]
+                            channel_data = channel_page.asarray()
+                            return channel_data[y:y+h, x:x+w]
+                        else:
+                            # Fallback: read first page and assume it's the green channel
+                            return page_data[y:y+h, x:x+w]
+                    else:  # Grayscale
                         return page_data[y:y+h, x:x+w]
-                else:  # Grayscale
-                    return page_data[y:y+h, x:x+w]
+            except Exception as e:
+                # Last resort: use raw TIFF reading
+                self.logger.warning(f"Direct page reading failed, using raw TIFF reading: {e}")
+                return self._extract_tile_raw_tiff(file_path, y, x, h, w, green_channel, num_channels, axes)
+    
+    def _extract_tile_raw_tiff(self, file_path: Path, y: int, x: int, h: int, w: int, 
+                              green_channel: int, num_channels: int, axes: str) -> np.ndarray:
+        """Extract tile using raw TIFF reading as last resort."""
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            
+            # Try using tifffile.imread with specific parameters to bypass OME metadata
+            try:
+                # Read the entire image (this will be memory intensive but necessary for corrupted files)
+                self.logger.warning("Reading entire image due to corrupted OME metadata - this will use significant memory")
+                full_image = tifffile.imread(file_path, key=0)  # Read first page only
+                
+                if axes == 'YXS':  # RGB format
+                    if len(full_image.shape) == 3:
+                        tile_region = full_image[y:y+h, x:x+w, :]
+                        return tile_region[:, :, green_channel]
+                    else:
+                        # Single channel, return as is
+                        return full_image[y:y+h, x:x+w]
+                else:  # Grayscale or other format
+                    return full_image[y:y+h, x:x+w]
+                    
+            except Exception as e:
+                self.logger.error(f"All extraction methods failed: {e}")
+                # Return a dummy tile to continue processing
+                return np.zeros((h, w), dtype=np.uint8)
+    
+    def _extract_tile_corrupted_workaround(self, file_path: Path, y: int, x: int, h: int, w: int, 
+                                          green_channel: int, num_channels: int, axes: str) -> np.ndarray:
+        """Extract tile using workaround for severely corrupted OME files."""
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            
+            try:
+                # Use tifffile.imread with specific parameters to bypass OME metadata
+                self.logger.warning("Using corrupted OME workaround - reading entire image")
+                full_image = tifffile.imread(file_path, key=0)  # Read first page only
+                
+                if axes == 'YXS':  # RGB format
+                    if len(full_image.shape) == 3:
+                        tile_region = full_image[y:y+h, x:x+w, :]
+                        return tile_region[:, :, green_channel]
+                    else:
+                        # Single channel, return as is
+                        return full_image[y:y+h, x:x+w]
+                else:  # Grayscale or other format
+                    return full_image[y:y+h, x:x+w]
+                    
+            except Exception as e:
+                self.logger.error(f"Corrupted OME workaround failed: {e}")
+                # Return a dummy tile to continue processing
+                return np.zeros((h, w), dtype=np.uint8)
                 
     def create_tile_filename(self, file_path: Path, tile_idx: int, y: int, x: int, 
                            h: int, w: int) -> str:
@@ -360,6 +425,8 @@ def main():
     parser.add_argument('--log-level', type=str, default='INFO', 
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                        help='Logging level')
+    parser.add_argument('--corrupted-ome-workaround', type=str, default='false',
+                       help='Enable workaround for corrupted OME metadata (true/false)')
     
     args = parser.parse_args()
     
@@ -380,6 +447,8 @@ def main():
         config['green_channel'] = args.green_channel
     if args.log_level:
         config['log_level'] = args.log_level
+    if args.corrupted_ome_workaround:
+        config['corrupted_ome_workaround'] = args.corrupted_ome_workaround.lower() == 'true'
         
     # Ensure log file path is absolute
     if not os.path.isabs(config['log_file']):

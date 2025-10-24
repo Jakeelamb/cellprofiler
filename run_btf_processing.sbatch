@@ -54,6 +54,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-./output}"
 TILE_SIZE="${TILE_SIZE:-2048}"
 GREEN_CHANNEL="${GREEN_CHANNEL:-1}"
 LOG_LEVEL="${LOG_LEVEL:-INFO}"
+CORRUPTED_OME_WORKAROUND="${CORRUPTED_OME_WORKAROUND:-true}"
 
 # Validate input directory
 if [ ! -d "$INPUT_DIR" ]; then
@@ -77,7 +78,8 @@ uv run python hpc_btf_processor.py \
     --output-dir "$OUTPUT_DIR" \
     --tile-size "$TILE_SIZE" \
     --green-channel "$GREEN_CHANNEL" \
-    --log-level "$LOG_LEVEL"
+    --log-level "$LOG_LEVEL" \
+    --corrupted-ome-workaround "$CORRUPTED_OME_WORKAROUND"
 
 # Check exit status
 if [ $? -eq 0 ]; then

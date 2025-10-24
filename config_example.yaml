@@ -21,6 +21,9 @@ log_file: "btf_processing.log"          # Log file name
 max_memory_gb: 60                       # Maximum memory usage in GB
 chunk_size: 1024                        # Chunk size for processing
 
+# Corrupted OME workaround
+corrupted_ome_workaround: false         # Set to true for files with corrupted OME metadata
+
 # File handling
 file_patterns:                          # File patterns to process
   - "*.btf"
