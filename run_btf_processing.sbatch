@@ -26,24 +26,20 @@ module purge
 module load python/3.12
 module load gcc/11.2.0
 
-# Create virtual environment if it doesn't exist
-VENV_DIR="/home/$USER/btf_processing_env"
-if [ ! -d "$VENV_DIR" ]; then
-    echo "Creating virtual environment..."
-    python -m venv "$VENV_DIR"
+# Install UV if not available
+if ! command -v uv &> /dev/null; then
+    echo "Installing UV..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.cargo/bin:$PATH"
 fi
-
-# Activate virtual environment
-source "$VENV_DIR/bin/activate"
-
-# Install/update dependencies
-echo "Installing dependencies..."
-pip install --upgrade pip
-pip install imagecodecs>=2025.8.2 numpy>=2.3.4 tifffile>=2025.10.16 tqdm>=4.66.0 PyYAML>=6.0
 
 # Set up working directory
 WORK_DIR="/home/$USER/Projects/cellprofiler_test"
 cd "$WORK_DIR"
+
+# Install dependencies with UV
+echo "Installing dependencies with UV..."
+uv sync
 
 # Create necessary directories
 mkdir -p input output logs
@@ -72,7 +68,7 @@ echo "Found $BTF_COUNT BTF files to process"
 
 # Run the processing pipeline
 echo "Starting BTF processing pipeline..."
-python hpc_btf_processor.py \
+uv run python hpc_btf_processor.py \
     --input-dir "$INPUT_DIR" \
     --output-dir "$OUTPUT_DIR" \
     --tile-size "$TILE_SIZE" \
@@ -90,7 +86,7 @@ if [ $? -eq 0 ]; then
     # Display summary
     if [ -f "$OUTPUT_DIR/processing_summary.json" ]; then
         echo "Processing Summary:"
-        cat "$OUTPUT_DIR/processing_summary.json" | python -m json.tool
+        cat "$OUTPUT_DIR/processing_summary.json" | uv run python -m json.tool
     fi
     
     # Show output structure
@@ -107,8 +103,5 @@ else
     echo "=========================================="
     exit 1
 fi
-
-# Deactivate virtual environment
-deactivate
 
 echo "Job completed at $(date)"
