@@ -49,6 +49,7 @@ Thumbs.db
 # Project specific
 input/
 output/
+data/
 logs/
 *.log
 *.out
@@ -57,9 +58,13 @@ job_info.json
 processing_summary.json
 validation_results.json
 
-# BTF files (usually too large for git)
+# Large image files (too large for git)
 *.btf
 *.ome.btf
+*.ome.tiff
+*.ome.tif
+Process_*.tif
+Process_*.tiff
 
 # Temporary files
 *.tmp
