@@ -65,7 +65,30 @@ uv run python extract_channel.py /input/dir /output/dir --green --recursive
 uv run python extract_channel.py /path/to/image.ome.tiff /output/dir --channel 1
 ```
 
-### 4. Verify Metadata Preservation
+### 4. Process BigTIFF Files (Alternative to VSI)
+
+For large OME-BigTIFF files (`.ome.btf`), extract the green channel directly with compression:
+
+```bash
+# Single BigTIFF file - achieves ~8x size reduction
+uv run python btf_to_green.py /path/to/image.ome.btf /output/dir
+
+# Process entire directory
+uv run python btf_to_green.py /input/dir /output/dir --recursive
+
+# Preview what would be processed
+uv run python btf_to_green.py /input/dir /output/dir --dry-run
+
+# Adjust compression (default: deflate level 6)
+uv run python btf_to_green.py /path/to/image.ome.btf /output/dir --compression lzw
+```
+
+Typical results:
+- 8.2 GB uncompressed RGB → ~1 GB compressed green channel
+- Metadata preserved (pixel size, channel info)
+- Output ready for CellProfiler analysis
+
+### 5. Verify Metadata Preservation
 
 ```bash
 # Check a single file
@@ -93,10 +116,16 @@ Expected output:
 - Contains resolution pyramid (multiple series)
 - Must keep `.vsi` and `_filename_/` folder together
 
+### BigTIFF Files (.ome.btf)
+- Large uncompressed RGB images (8+ GB each)
+- Contains full OME-XML metadata
+- Use `btf_to_green.py` to extract green channel with compression
+- Achieves ~8x size reduction while preserving metadata
+
 ### OME-TIFF Output
 - Single file containing image + all metadata
 - Uses OME-XML standard for metadata
-- LZW compressed by default
+- Compressed (deflate/LZW) by default
 - BigTIFF format for large files
 
 ## Directory Structure

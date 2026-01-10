@@ -44,16 +44,19 @@ def get_ome_xml(file_path: Path) -> str | None:
 
 
 def try_tifffile(file_path: Path) -> dict | None:
-    """Try to read metadata using tifffile."""
+    """Try to read metadata using tifffile, including parsing OME-XML."""
     try:
         # Use uv run to access tifffile in the virtual environment
         result = subprocess.run(
             ["uv", "run", "python", "-c", f"""
 import tifffile
 import json
+import xml.etree.ElementTree as ET
+
 with tifffile.TiffFile('{file_path}') as tif:
     page = tif.pages[0]
     meta = {{}}
+
     # Get resolution from TIFF tags
     if hasattr(page, 'tags'):
         tags = page.tags
@@ -69,10 +72,67 @@ with tifffile.TiffFile('{file_path}') as tif:
             unit = tags['ResolutionUnit'].value
             meta['resolution_unit'] = str(unit)
 
-    # Get OME-XML if present
+    # Get OME-XML if present and parse it
     if tif.ome_metadata:
         meta['has_ome'] = True
-        meta['ome_preview'] = tif.ome_metadata[:500]
+        ome_xml = tif.ome_metadata
+        try:
+            xml_start = ome_xml.find("<?xml")
+            if xml_start < 0:
+                xml_start = ome_xml.find("<OME")
+            if xml_start >= 0:
+                ome_xml = ome_xml[xml_start:]
+
+            root = ET.fromstring(ome_xml)
+
+            # Try different namespaces
+            for ns in [
+                {{"ome": "http://www.openmicroscopy.org/Schemas/OME/2016-06"}},
+                {{"ome": "http://www.openmicroscopy.org/Schemas/OME/2015-01"}},
+                {{}},
+            ]:
+                pixels = root.find(".//ome:Pixels", ns) if ns else root.find(".//Pixels")
+                if pixels is not None:
+                    break
+
+            if pixels is not None:
+                phys_x = pixels.get("PhysicalSizeX")
+                phys_y = pixels.get("PhysicalSizeY")
+                unit_x = pixels.get("PhysicalSizeXUnit", "um")
+                if phys_x:
+                    meta['physical_size_x'] = phys_x
+                if phys_y:
+                    meta['physical_size_y'] = phys_y
+                meta['unit'] = unit_x
+                meta['size_x'] = pixels.get("SizeX")
+                meta['size_y'] = pixels.get("SizeY")
+                meta['dtype_ome'] = pixels.get("Type")
+
+            # Try to get objective info
+            for ns in [
+                {{"ome": "http://www.openmicroscopy.org/Schemas/OME/2016-06"}},
+                {{"ome": "http://www.openmicroscopy.org/Schemas/OME/2015-01"}},
+                {{}},
+            ]:
+                objective = root.find(".//ome:Objective", ns) if ns else root.find(".//Objective")
+                if objective is not None:
+                    meta['objective'] = objective.get("Model")
+                    meta['magnification'] = objective.get("NominalMagnification")
+                    break
+
+            # Get channel info
+            for ns in [
+                {{"ome": "http://www.openmicroscopy.org/Schemas/OME/2016-06"}},
+                {{"ome": "http://www.openmicroscopy.org/Schemas/OME/2015-01"}},
+                {{}},
+            ]:
+                channels = root.findall(".//ome:Channel", ns) if ns else root.findall(".//Channel")
+                if channels:
+                    meta['channels'] = [c.get("Name", "Unknown") for c in channels]
+                    break
+
+        except ET.ParseError:
+            pass
     else:
         meta['has_ome'] = False
 
@@ -195,7 +255,40 @@ def check_file(file_path: Path) -> dict:
 
     result["size_mb"] = file_path.stat().st_size / (1024 * 1024)
 
-    # Try Bio-Formats first
+    # Try tifffile first (more reliable for files created by our scripts)
+    tiff_meta = try_tifffile(file_path)
+    if tiff_meta and tiff_meta.get("physical_size_x"):
+        result["metadata"] = {
+            "from_tifffile": True,
+            "has_ome": tiff_meta.get("has_ome", False),
+            "shape": tiff_meta.get("shape"),
+            "dtype": tiff_meta.get("dtype"),
+            "x_resolution": tiff_meta.get("x_resolution"),
+            "y_resolution": tiff_meta.get("y_resolution"),
+            "physical_size_x": tiff_meta.get("physical_size_x"),
+            "physical_size_y": tiff_meta.get("physical_size_y"),
+            "unit_x": tiff_meta.get("unit", "µm"),
+            "objective": tiff_meta.get("objective"),
+            "magnification": tiff_meta.get("magnification"),
+            "channels": tiff_meta.get("channels", []),
+            "dimensions": {
+                "width": tiff_meta.get("size_x"),
+                "height": tiff_meta.get("size_y"),
+                "type": tiff_meta.get("dtype_ome", tiff_meta.get("dtype")),
+            },
+        }
+        try:
+            px = float(tiff_meta["physical_size_x"])
+            py = float(tiff_meta["physical_size_y"])
+            if px > 0 and py > 0:
+                result["status"] = "valid"
+            else:
+                result["status"] = "tiff_only"
+        except ValueError:
+            result["status"] = "tiff_only"
+        return result
+
+    # Fallback to Bio-Formats
     ome_xml = get_ome_xml(file_path)
     if ome_xml:
         result["metadata"] = parse_ome_metadata(ome_xml)
@@ -204,20 +297,7 @@ def check_file(file_path: Path) -> dict:
         else:
             result["status"] = "missing_metadata"
     else:
-        # Fallback to tifffile
-        tiff_meta = try_tifffile(file_path)
-        if tiff_meta:
-            result["metadata"] = {
-                "from_tifffile": True,
-                "has_ome": tiff_meta.get("has_ome", False),
-                "shape": tiff_meta.get("shape"),
-                "dtype": tiff_meta.get("dtype"),
-                "x_resolution": tiff_meta.get("x_resolution"),
-                "y_resolution": tiff_meta.get("y_resolution"),
-            }
-            result["status"] = "tiff_only"
-        else:
-            result["status"] = "cannot_read"
+        result["status"] = "cannot_read"
 
     return result
 
@@ -239,8 +319,18 @@ def print_result(result: dict, verbose: bool = False):
     meta = result.get("metadata")
     if meta:
         if meta.get("from_tifffile"):
-            print(f"    Format: Standard TIFF (no OME metadata)")
-            if meta.get("x_resolution"):
+            if meta.get("physical_size_x"):
+                # Has OME metadata parsed by tifffile
+                print(f"    Pixel size: {meta['physical_size_x']} x {meta['physical_size_y']} {meta.get('unit_x', 'µm')}")
+                if meta.get("objective"):
+                    print(f"    Objective: {meta['objective']} ({meta.get('magnification')}x)")
+                if meta.get("channels"):
+                    print(f"    Channels: {', '.join(meta['channels'])}")
+                if meta.get("dimensions"):
+                    dims = meta["dimensions"]
+                    print(f"    Size: {dims.get('width')} x {dims.get('height')} ({dims.get('type')})")
+            elif meta.get("x_resolution"):
+                print(f"    Format: Standard TIFF (no OME metadata)")
                 print(f"    Resolution: {meta.get('x_resolution')} x {meta.get('y_resolution')}")
         else:
             if meta.get("physical_size_x"):
