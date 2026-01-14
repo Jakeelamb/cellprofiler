@@ -51,12 +51,14 @@ input/
 output/
 data/
 logs/
+recovery/
 *.log
 *.out
 *.err
 job_info.json
 processing_summary.json
 validation_results.json
+test_filelist.txt
 
 # Large image files (too large for git)
 *.btf

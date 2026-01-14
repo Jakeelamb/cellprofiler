@@ -1,19 +1,54 @@
-# Microscopy Image Processing for CellProfiler
+# CellProfiler Tools
 
 Tools for converting Olympus VSI and BigTIFF microscopy files to CellProfiler-compatible OME-TIFF format while **preserving all metadata** (pixel sizes, objective info, stage positions).
 
 ## Features
 
-- **Metadata preservation**: Keeps physical pixel sizes (µm/pixel), objective info, channel names
+- **Metadata preservation**: Keeps physical pixel sizes (um/pixel), objective info, channel names
 - **Safe processing**: Reads from source drive (mounted read-only), writes to separate destination
 - **Large file support**: Handles multi-gigabyte BigTIFF and VSI pyramid images
 - **CellProfiler ready**: Output files include all metadata needed for accurate measurements
 
-## Requirements
+## Project Structure
 
-- Python 3.12+
-- Bio-Formats command line tools (bftools)
-- tifffile, numpy, imagecodecs (via uv)
+```
+cellprofiler-tools/
+├── src/cellprofiler_tools/      # Python package
+│   ├── converters/              # Image format converters
+│   │   ├── btf_to_green.py      # BigTIFF green channel extraction
+│   │   ├── extract_channel.py   # Generic channel extraction
+│   │   └── vsi_to_ometiff.py    # VSI to OME-TIFF conversion
+│   ├── batch/                   # Batch processing
+│   │   ├── process.py           # Sequential batch processing
+│   │   └── process_parallel.py  # Parallel processing with RAM monitoring
+│   └── analysis/                # Analysis tools
+│       ├── calculate_iod.py     # IOD calculation for genome size
+│       └── verify_metadata.py   # Metadata validation
+├── pipelines/                   # CellProfiler pipelines
+│   ├── oil_immersion.cppipe     # For nucleus-only images
+│   └── brightfield.cppipe       # For nucleus + cytoplasm images
+├── scripts/                     # Shell scripts
+│   ├── process_all.sh           # Parallel batch processor
+│   ├── run_batch.sh             # Conservative batch runner
+│   └── mount_easystore.sh       # Drive mounting helper
+└── docs/                        # Documentation
+    ├── PIPELINE_DOCUMENTATION.md
+    └── CONVERSION_REPORT.md
+```
+
+## Installation
+
+```bash
+# Clone the repository
+git clone <repo-url>
+cd cellprofiler-tools
+
+# Install dependencies
+uv sync
+
+# Install in development mode (optional)
+uv pip install -e .
+```
 
 ### Installing Bio-Formats Tools
 
@@ -38,75 +73,78 @@ udisksctl mount -b /dev/sda1 --options ro
 
 ```bash
 # Single file
-python vsi_to_ometiff.py /path/to/image.vsi /output/dir
+python src/cellprofiler_tools/converters/vsi_to_ometiff.py /path/to/image.vsi /output/dir
 
 # Entire directory (recursive)
-python vsi_to_ometiff.py /path/to/input_dir /output/dir --recursive
+python src/cellprofiler_tools/converters/vsi_to_ometiff.py /path/to/input_dir /output/dir --recursive
 
 # Preview what would be converted
-python vsi_to_ometiff.py /path/to/input_dir /output/dir --dry-run
-
-# Export specific resolution level (0 = full resolution, default)
-python vsi_to_ometiff.py /path/to/image.vsi /output/dir --series 0
+python src/cellprofiler_tools/converters/vsi_to_ometiff.py /path/to/input_dir /output/dir --dry-run
 ```
 
-### 3. Extract Green Channel Only (Recommended for Analysis)
+### 3. Extract Green Channel (Recommended for Analysis)
 
-For CellProfiler analysis, you typically only need the green channel. This reduces file size by ~66%:
+For CellProfiler analysis, you typically only need the green channel. This reduces file size significantly:
 
 ```bash
 # Extract green channel from converted OME-TIFF
-uv run python extract_channel.py /path/to/image.ome.tiff /output/dir --green
+python src/cellprofiler_tools/converters/extract_channel.py /path/to/image.ome.tiff /output/dir --green
 
 # Process entire directory
-uv run python extract_channel.py /input/dir /output/dir --green --recursive
-
-# Or specify channel by number (0=Red, 1=Green, 2=Blue)
-uv run python extract_channel.py /path/to/image.ome.tiff /output/dir --channel 1
+python src/cellprofiler_tools/converters/extract_channel.py /input/dir /output/dir --green --recursive
 ```
 
-### 4. Process BigTIFF Files (Alternative to VSI)
+### 4. Process BigTIFF Files
 
 For large OME-BigTIFF files (`.ome.btf`), extract the green channel directly with compression:
 
 ```bash
 # Single BigTIFF file - achieves ~8x size reduction
-uv run python btf_to_green.py /path/to/image.ome.btf /output/dir
+python src/cellprofiler_tools/converters/btf_to_green.py /path/to/image.ome.btf /output/dir
 
 # Process entire directory
-uv run python btf_to_green.py /input/dir /output/dir --recursive
+python src/cellprofiler_tools/converters/btf_to_green.py /input/dir /output/dir --recursive
 
 # Preview what would be processed
-uv run python btf_to_green.py /input/dir /output/dir --dry-run
-
-# Adjust compression (default: deflate level 6)
-uv run python btf_to_green.py /path/to/image.ome.btf /output/dir --compression lzw
+python src/cellprofiler_tools/converters/btf_to_green.py /input/dir /output/dir --dry-run
 ```
 
-Typical results:
-- 8.2 GB uncompressed RGB → ~1 GB compressed green channel
-- Metadata preserved (pixel size, channel info)
-- Output ready for CellProfiler analysis
+### 5. Batch Processing
 
-### 5. Verify Metadata Preservation
+```bash
+# Sequential processing
+python src/cellprofiler_tools/batch/process.py /input/dir /output/dir
+
+# Parallel processing with RAM monitoring
+python src/cellprofiler_tools/batch/process_parallel.py /input/dir /output/dir --workers 4
+```
+
+### 6. Verify Metadata Preservation
 
 ```bash
 # Check a single file
-python verify_metadata.py /output/dir/image.ome.tiff
+python src/cellprofiler_tools/analysis/verify_metadata.py /output/dir/image.ome.tiff
 
 # Check all files in directory
-python verify_metadata.py /output/dir
+python src/cellprofiler_tools/analysis/verify_metadata.py /output/dir
 ```
 
-Expected output:
+### 7. Calculate IOD (Post-CellProfiler Analysis)
+
+After running CellProfiler analysis, calculate true IOD for genome size estimation:
+
+```bash
+python src/cellprofiler_tools/analysis/calculate_iod.py /path/to/cellprofiler_output.csv /path/to/images/
 ```
-✓ /output/dir/image.ome.tiff (7.1 MB)
-    Pixel size: 0.12 x 0.12 µm
-    Objective: LUCPLFLN PH (40.0x)
-    Channels: BF
-    Size: 3088 x 2076 (uint8)
-    → Ready for CellProfiler analysis
-```
+
+## CellProfiler Pipelines
+
+Two analysis pipelines are included in `pipelines/`:
+
+- **oil_immersion.cppipe**: For nucleus-only images (immersion oil microscopy)
+- **brightfield.cppipe**: For nucleus + cytoplasm images (brightfield microscopy)
+
+See `docs/PIPELINE_DOCUMENTATION.md` for detailed pipeline documentation.
 
 ## File Format Notes
 
@@ -128,22 +166,6 @@ Expected output:
 - Compressed (deflate/LZW) by default
 - BigTIFF format for large files
 
-## Directory Structure
-
-```
-microscopy_data/              # Output directory (on local drive)
-├── image1.ome.tiff          # Converted images with metadata
-├── image2.ome.tiff
-└── ...
-
-/run/media/jake/easystore/   # Source drive (mounted read-only)
-├── image1.vsi
-├── _image1_/                # VSI companion data
-│   └── stack1/
-│       └── frame_t_0.ets    # Actual image data
-└── ...
-```
-
 ## Safety Features
 
 The scripts include safety checks to prevent accidental overwrites:
@@ -151,26 +173,8 @@ The scripts include safety checks to prevent accidental overwrites:
 - Source drive should be mounted read-only
 - All processing creates new files in the destination directory
 
-## CellProfiler Integration
+## Requirements
 
-The output OME-TIFF files are directly compatible with CellProfiler:
-1. Open CellProfiler
-2. Images module → drag and drop OME-TIFF files
-3. Metadata will be automatically extracted
-4. Measurements will be in real units (µm) instead of pixels
-
-## Dependencies
-
-```toml
-[project]
-dependencies = [
-    "imagecodecs>=2025.8.2",
-    "numpy>=2.3.4",
-    "tifffile>=2025.10.16",
-    "tqdm>=4.66.0",
-    "PyYAML>=6.0",
-    "psutil>=5.9.0",
-]
-```
-
-Install with: `uv sync`
+- Python 3.12+
+- Bio-Formats command line tools (bftools)
+- Dependencies managed via uv (see pyproject.toml)

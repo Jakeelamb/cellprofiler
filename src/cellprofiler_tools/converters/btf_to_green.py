@@ -23,12 +23,14 @@ Usage:
 
 import argparse
 import gc
+import os
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
 import tifffile
+import zarr
 from tqdm import tqdm
 
 
@@ -111,6 +113,152 @@ def create_ome_xml(metadata: dict, width: int, height: int) -> str:
     return ome_xml
 
 
+def process_btf_file_chunked(
+    input_path: Path,
+    output_dir: Path,
+    compression: str = "deflate",
+    compression_level: int = 6,
+    tile_size: int = 512,
+    channel: int = 1,
+    dry_run: bool = False,
+    verbose: bool = False,
+    chunk_rows: int = 2048,
+) -> tuple[bool, str]:
+    """
+    Extract green channel from a BigTIFF file with compression.
+
+    Uses memory-mapped temporary file to process the image in chunks
+    without loading the entire file into RAM at once.
+
+    Returns (success, message) tuple.
+    """
+    channel_names = {0: "red", 1: "green", 2: "blue"}
+    channel_name = channel_names.get(channel, f"ch{channel}")
+
+    output_name = f"{input_path.stem.replace('.ome', '')}_{channel_name}.ome.tiff"
+    output_path = output_dir / output_name
+
+    if dry_run:
+        return True, f"Would process: {input_path.name} -> {output_name}"
+
+    temp_path = None
+    try:
+        with tifffile.TiffFile(input_path) as tif:
+            page = tif.pages[0]
+            shape = page.shape
+
+            if len(shape) < 3 or shape[-1] not in [3, 4]:
+                return False, f"Not an RGB image (shape: {shape})"
+
+            height, width = shape[0], shape[1]
+            dtype = page.dtype
+            input_size_gb = input_path.stat().st_size / (1024**3)
+
+            if verbose:
+                print(f"  Input: {width}x{height}, {shape[-1]} channels, {input_size_gb:.1f} GB")
+
+            # Extract metadata
+            metadata = {}
+            if tif.ome_metadata:
+                metadata = extract_pixel_metadata(tif.ome_metadata)
+                if verbose and metadata.get("PhysicalSizeX"):
+                    print(f"  Pixel size: {metadata['PhysicalSizeX']} {metadata.get('PhysicalSizeXUnit', 'µm')}")
+
+            # Create output directory
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            # Create OME-XML
+            ome_xml = create_ome_xml(metadata, width, height)
+
+            # Align chunk_rows to tile_size for efficient writing
+            chunk_rows = ((chunk_rows + tile_size - 1) // tile_size) * tile_size
+
+            # Calculate number of chunks
+            num_chunks = (height + chunk_rows - 1) // chunk_rows
+
+            if verbose:
+                chunk_mem_mb = (chunk_rows * width * np.dtype(dtype).itemsize) / (1024**2)
+                print(f"  Processing in {num_chunks} chunks (~{chunk_mem_mb:.0f} MB each)")
+
+            # Use zarr store for memory-efficient access (reads tiles on demand)
+            store = tif.aszarr()
+            z = zarr.open(store, mode='r')
+
+            # Handle zarr array structure - may be nested for OME-TIFF
+            if hasattr(z, 'shape'):
+                zarray = z
+            elif '0' in z:
+                zarray = z['0']
+            else:
+                keys = list(z.keys())
+                if keys:
+                    zarray = z[keys[0]]
+                else:
+                    return False, "Could not access image data via zarr"
+
+            # Create memory-mapped temp file for the single-channel output
+            # Use output_dir for temp files to avoid filling /tmp (which may be RAM-based)
+            temp_path = output_dir / f".tmp_{input_path.stem}_{os.getpid()}.dat"
+            temp_file = None  # Will be created by memmap
+
+            # Create memory-mapped array
+            memmap_shape = (height, width)
+            memmap_array = np.memmap(temp_path, dtype=dtype, mode='w+', shape=memmap_shape)
+
+            if verbose:
+                print(f"  Extracting {channel_name} channel...")
+
+            # Fill the memmap chunk by chunk
+            for chunk_idx in tqdm(range(num_chunks), desc="  Reading", disable=not verbose):
+                row_start = chunk_idx * chunk_rows
+                row_end = min(row_start + chunk_rows, height)
+
+                # Read chunk via zarr (only loads necessary tiles from disk)
+                memmap_array[row_start:row_end, :] = zarray[row_start:row_end, :, channel]
+
+            # Flush to disk
+            memmap_array.flush()
+
+            store.close()
+
+            if verbose:
+                print(f"  Writing compressed output...")
+
+            # Write the memmap to compressed TIFF
+            tifffile.imwrite(
+                output_path,
+                memmap_array,
+                bigtiff=True,
+                tile=(tile_size, tile_size),
+                compression=compression,
+                compressionargs={"level": compression_level},
+                photometric="minisblack",
+                description=ome_xml,
+            )
+
+            # Clean up memmap
+            del memmap_array
+            gc.collect()
+
+            output_size_mb = output_path.stat().st_size / (1024**2)
+            reduction = input_size_gb * 1024 / output_size_mb
+
+            return True, f"Created {output_path.name} ({output_size_mb:.0f} MB, {reduction:.1f}x reduction)"
+
+    except MemoryError:
+        return False, "Out of memory - try reducing --chunk-rows"
+    except Exception as e:
+        import traceback
+        return False, f"Error: {e}\n{traceback.format_exc()}"
+    finally:
+        # Clean up temp file
+        if temp_path is not None:
+            try:
+                os.unlink(temp_path)
+            except Exception:
+                pass
+
+
 def process_btf_file(
     input_path: Path,
     output_dir: Path,
@@ -123,6 +271,7 @@ def process_btf_file(
 ) -> tuple[bool, str]:
     """
     Extract green channel from a BigTIFF file with compression.
+    Legacy function - loads entire image into memory.
 
     Returns (success, message) tuple.
     """
@@ -276,6 +425,17 @@ def main():
         action="store_true",
         help="Verbose output"
     )
+    parser.add_argument(
+        "--chunk-rows",
+        type=int,
+        default=2048,
+        help="Number of rows to process at once (default: 2048). Lower = less RAM"
+    )
+    parser.add_argument(
+        "--no-chunked",
+        action="store_true",
+        help="Disable chunked processing (loads entire image into RAM)"
+    )
 
     args = parser.parse_args()
 
@@ -305,16 +465,29 @@ def main():
     for i, f in enumerate(files, 1):
         print(f"[{i}/{len(files)}] {f.name}")
 
-        success, msg = process_btf_file(
-            f,
-            args.output_dir,
-            compression=args.compression,
-            compression_level=args.compression_level,
-            tile_size=args.tile_size,
-            channel=args.channel,
-            dry_run=args.dry_run,
-            verbose=args.verbose,
-        )
+        if args.no_chunked:
+            success, msg = process_btf_file(
+                f,
+                args.output_dir,
+                compression=args.compression,
+                compression_level=args.compression_level,
+                tile_size=args.tile_size,
+                channel=args.channel,
+                dry_run=args.dry_run,
+                verbose=args.verbose,
+            )
+        else:
+            success, msg = process_btf_file_chunked(
+                f,
+                args.output_dir,
+                compression=args.compression,
+                compression_level=args.compression_level,
+                tile_size=args.tile_size,
+                channel=args.channel,
+                dry_run=args.dry_run,
+                verbose=args.verbose,
+                chunk_rows=args.chunk_rows,
+            )
 
         if success:
             successful += 1
