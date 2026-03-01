@@ -146,6 +146,32 @@ Two analysis pipelines are included in `pipelines/`:
 
 See `docs/PIPELINE_DOCUMENTATION.md` for detailed pipeline documentation.
 
+## Cellpose Brightfield Crop Workflow
+
+For crop-only brightfield segmentation with Cellpose pretrained weights (no whole-slide runs), use:
+
+```bash
+/home/jake/bin/miniconda3/bin/python scripts/run_cellpose_brightfield_crops.py \
+  --max-images 3 \
+  --run-name validated
+```
+
+What this does:
+- Inputs only brightfield crops from `data/tuning/brightfield/*.tif*` and `data/tuning/subset/*brightfield*.tif*`
+- Runs Cellpose pretrained `cpsam` twice per crop:
+  - nucleus-scale pass (`--nucleus-diameter`, default `12`)
+  - cell-scale pass (`--cell-diameter`, default `62`)
+- Filters out likely clumps/overlaps and poor single-cell candidates using morphology + overlap heuristics
+- Writes per-image outputs (raw crop, raw/kept nucleus mask, raw/kept cell mask, overlays) and CSV QC metrics
+
+Outputs are written to a timestamped folder:
+
+```text
+results/cellpose_brightfield_crops_<timestamp>_<run_name>/
+```
+
+Use this for validation samples and tuning crops only; do not use this script on whole-slide images.
+
 ## File Format Notes
 
 ### VSI Files (Olympus/Evident)
