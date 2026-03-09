@@ -1,5 +1,14 @@
 # CellProfiler Tools
 
+## Current Architecture Note
+
+The canonical repo-wide pipeline architecture is now documented in:
+
+- `/home/jake/Projects/cellprofiler_test/three_pipelines/README.md`
+- `/home/jake/Projects/cellprofiler_test/docs/MIXED_CELLPOSE_YOLO_WORKFLOW.md`
+
+Use that document plus the active per-pipeline READMEs as the current source of truth for shared data roots, shared output roots, traceability requirements, and UV dependency policy.
+
 Tools for converting Olympus VSI and BigTIFF microscopy files to CellProfiler-compatible OME-TIFF format while **preserving all metadata** (pixel sizes, objective info, stage positions).
 
 ## Features
