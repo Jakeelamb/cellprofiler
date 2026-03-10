@@ -13,6 +13,11 @@ import numpy as np
 from PIL import Image
 
 PROJECT = Path(__file__).resolve().parent.parent
+import sys
+
+sys.path.insert(0, str(PROJECT / "src"))
+
+from cellprofiler_tools.pipeline_runs import resolve_image_path  # noqa: E402
 DEFAULT_MANIFEST = PROJECT / "output" / "nucleus_label_manual_round1" / "manifest.csv"
 DEFAULT_LABEL_DIR = PROJECT / "output" / "nucleus_label_manual_round1" / "correction_bundle"
 DEFAULT_OUTPUT = PROJECT / "output" / "yolo_nucleus_dataset_round1"
@@ -89,9 +94,12 @@ def resolve_manifest_path(manifest_path: Path, value: str) -> Path:
 
 def row_image_name(manifest_path: Path, row: dict[str, str]) -> str:
     value = first_present(row, "correction_image_path", "annotation_image_path", "image_path_abs", "image_path")
-    if not value:
-        raise KeyError("row missing image path fields")
-    return resolve_manifest_path(manifest_path, value).name
+    if value:
+        return resolve_manifest_path(manifest_path, value).name
+    filename = str(row.get("filename", "")).strip()
+    if filename:
+        return filename
+    raise KeyError("row missing image path fields and filename")
 
 
 def row_source_image_path(manifest_path: Path, row: dict[str, str]) -> Path:
@@ -103,9 +111,13 @@ def row_source_image_path(manifest_path: Path, row: dict[str, str]) -> Path:
         "correction_image_path",
         "image_path",
     )
-    if not value:
-        raise KeyError("row missing source image path fields")
-    return resolve_manifest_path(manifest_path, value)
+    if value:
+        return resolve_manifest_path(manifest_path, value)
+    filename = str(row.get("filename", "")).strip()
+    image_type = str(row.get("image_type", "")).strip()
+    if filename and image_type:
+        return resolve_image_path({"filename": filename, "image_type": image_type})
+    raise KeyError("row missing source image path fields and filename/image_type")
 
 
 def row_split(row: dict[str, str]) -> str:

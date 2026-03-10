@@ -1,14 +1,11 @@
 # Mixed Cellpose + YOLO Workflow
 
-## Current Decision
+## Current Stack
 
-The current segmentation path forward is:
-
-- **Cells:** custom Cellpose cell model
-- **Nuclei:** custom YOLO nucleus model
-- **Linkage:** direct nucleus-mask to cell-mask overlap, with centroid fallback only when overlap artifacts are missing
-
-This replaces the previous idea of using YOLO for both objects. On the current smoke test, the mixed stack links substantially more usable cell-nucleus pairs.
+- Cells: custom Cellpose cell model
+- Nuclei: custom YOLO nucleus model
+- Nucleus intensity: brightfield nucleus IOD background cache
+- Linkage: full nucleus-mask overlap to cell-mask overlap, with centroid fallback
 
 ## Active Models
 
@@ -17,76 +14,79 @@ This replaces the previous idea of using YOLO for both objects. On the current s
 - YOLO nucleus model:
   - `runs/segment/output/yolo_nucleus_training_final_area500_shape/weights/best.pt`
 
-## Why This Is The Chosen Stack
+## Retained Training Assets
 
-On the same 12 corrected cell training tiles, the mixed stack outperformed the YOLO-cell plus YOLO-nucleus smoke run for pair recovery:
+- Cell training bundle:
+  - `output/tile_annotation_bundle_v1`
+  - `output/tile_bootstrap_review_v1`
+  - `output/tile_training_round_v1`
+- Nucleus training bundle:
+  - `output/nucleus_label_manual_round1`
+  - `output/yolo_nucleus_label_round2`
+  - `output/yolo_nucleus_label_round3`
+  - `output/yolo_nucleus_dataset_final_area500_shape`
 
-- Mixed stack:
-  - `554` matched nuclei
-  - `388` strict-core linked pairs
-- YOLO + YOLO smoke run:
-  - `459` matched nuclei
-  - `323` strict-core linked pairs
+## Full-Dataset Outputs
 
-Mixed-stack linkage output:
+- Reused full Cellpose cell run:
+  - `output/runs/full_dataset_v1`
+- Final mixed run:
+  - `output/runs/mixed_cellpose_yolo_full_dataset_v1`
 
-- `output/cellpose_cell_yolo_nucleus_linkage_smoke/index.html`
-- `output/cellpose_cell_yolo_nucleus_linkage_smoke/summary.json`
+Key final artifacts:
 
-Important caveat:
+- `output/runs/mixed_cellpose_yolo_full_dataset_v1/linkage/index.html`
+- `output/runs/mixed_cellpose_yolo_full_dataset_v1/linkage/summary.json`
+- `output/runs/mixed_cellpose_yolo_full_dataset_v1/linkage/linked_nucleus_pairs.csv.gz`
+- `output/runs/mixed_cellpose_yolo_full_dataset_v1/linkage/cell_linkage_summary.csv.gz`
 
-- This is a **smoke validation**, not a held-out benchmark.
-- The current comparison is based on `12` corrected tiles from `2` source images:
-  - `Process_316_raw_green.ome.tiff`
-  - `Process_366_raw_green.ome.tiff`
+## Reproducing The Current Mixed Run On New Brightfield Images
 
-## Reproducible Smoke Workflow
-
-### 1. Run Cellpose on the corrected cell tiles
-
-```bash
-python3 scripts/run_tile_prediction_review.py \
-  --tile-bundle output/tile_annotation_bundle_v1 \
-  --model-path output/tile_training_round_v1/train/models/desmognathus_tile_round1 \
-  --output-dir output/cellpose_cell_eval_smoke \
-  --cellpose-python python3 \
-  --label-dir output/tile_bootstrap_review_v1/correction_bundle \
-  --selection annotated \
-  --use-gpu
-```
-
-This writes Cellpose `_masks.png` predictions into:
-
-- `output/cellpose_cell_eval_smoke/correction_bundle`
-
-### 2. Convert Cellpose cell masks into linkage-ready measurements
+### 1. Run Cellpose cell segmentation
 
 ```bash
-python3 scripts/measure_cellpose_tile_predictions.py \
-  --manifest output/tile_training_round_v1/training_manifest.csv \
-  --prediction-dir output/cellpose_cell_eval_smoke/correction_bundle \
-  --output-dir output/cellpose_cell_measurements_smoke \
-  --min-mask-area 3500 \
-  --min-circularity 0.55 \
-  --min-solidity 0.92 \
-  --max-aspect-ratio 3.0
+python3 cell_size_segmentation_pipeline/run_from_manifest.py \
+  --manifest data/manifests/full_dataset_v1.csv \
+  --output-dir output/runs/<run_tag>/cell_size_segmentation \
+  --backend cellpose \
+  --cellpose-model output/tile_training_round_v1/train/models/desmognathus_tile_round1 \
+  --gpu \
+  --image-type brightfield \
+  --resume
 ```
 
-This produces:
+### 2. Build a brightfield nucleus background cache
 
-- `output/cellpose_cell_measurements_smoke/all_measurements.csv`
+```bash
+python3 nucleus_iod_estimate_pipeline/run_from_manifest.py \
+  --manifest data/manifests/full_dataset_v1.csv \
+  --output-dir output/runs/<run_tag>/nucleus_iod \
+  --image-type brightfield \
+  --backend imagej \
+  --resume
+```
 
-The cell filters above are intentionally conservative and based on the corrected cell masks used for training.
+This produces the background cache used for tile-level nucleus IOD measurement:
 
-### 3. Run the YOLO nucleus model on the same tile manifest
+- `output/runs/<run_tag>/nucleus_iod/measurements/nucleus_iod_measurements.csv`
+
+### 3. Extract the exact cell-linked tiles
+
+```bash
+python3 scripts/prepare_mixed_linkage_tiles.py \
+  --cell-csv output/runs/<run_tag>/cell_size_segmentation/all_measurements.csv \
+  --output-dir output/runs/<run_tag>/prepare
+```
+
+### 4. Run the YOLO nucleus model on those tiles
 
 ```bash
 /home/jake/Projects/cellprofiler_test/.venv-yolo/bin/python scripts/run_yolo_tile_measurements.py \
-  --manifest output/tile_training_round_v1/training_manifest.csv \
+  --manifest output/runs/<run_tag>/prepare/tile_manifest.csv \
   --model runs/segment/output/yolo_nucleus_training_final_area500_shape/weights/best.pt \
-  --output-dir output/yolo_nucleus_measurements_smoke \
+  --output-dir output/runs/<run_tag>/nucleus_measurements \
   --object-kind nucleus \
-  --background-cache output/nucleus_iod/nucleus_iod_measurements.csv \
+  --background-cache output/runs/<run_tag>/nucleus_iod/measurements/nucleus_iod_measurements.csv \
   --min-mask-area 500 \
   --min-circularity 0.55 \
   --min-solidity 0.92 \
@@ -94,53 +94,33 @@ The cell filters above are intentionally conservative and based on the corrected
   --device 0
 ```
 
-This produces:
-
-- `output/yolo_nucleus_measurements_smoke/all_measurements.csv`
-
-### 4. Link nuclei to cells by mask overlap
+### 5. Link nuclei to cells
 
 ```bash
 python3 scripts/build_cell_nucleus_linkage_report.py \
-  --cell-csv output/cellpose_cell_measurements_smoke/all_measurements.csv \
-  --nucleus-csv output/yolo_nucleus_measurements_smoke/all_measurements.csv \
-  --output-dir output/cellpose_cell_yolo_nucleus_linkage_smoke
+  --cell-csv output/runs/<run_tag>/prepare/cell_measurements_backfilled.csv \
+  --nucleus-csv output/runs/<run_tag>/nucleus_measurements/all_measurements.csv \
+  --output-dir output/runs/<run_tag>/linkage
 ```
 
-This produces:
+## Traceability Contract
 
-- `output/cellpose_cell_yolo_nucleus_linkage_smoke/index.html`
-- `output/cellpose_cell_yolo_nucleus_linkage_smoke/summary.json`
-- `output/cellpose_cell_yolo_nucleus_linkage_smoke/linked_nucleus_pairs.csv.gz`
-- `output/cellpose_cell_yolo_nucleus_linkage_smoke/cell_linkage_summary.csv.gz`
+The final linked table keeps:
 
-## Scripts Added Or Extended For This Path
+- source image paths for both objects
+- both run manifests
+- both tile manifests
+- both mask paths
+- tile coordinates
+- object IDs
+- overlap/linkage statistics
 
-- `scripts/measure_cellpose_tile_predictions.py`
-  - Converts Cellpose `_masks.png` tile predictions into the same measurement contract used by the linker.
-- `scripts/run_yolo_tile_measurements.py`
-  - Runs the YOLO segmentation model on tile manifests and emits measurement CSVs plus label masks.
-- `scripts/build_cell_nucleus_linkage_report.py`
-  - Now prefers full nucleus-mask overlap before centroid fallback.
+## Archive Rule
 
-## Operational Notes
+Historical scripts, docs, experiments, and older outputs were moved to:
 
-- The nucleus model is now shape-filtered and area-filtered before measurement export.
-- The cell measurement export uses conservative morphology gates:
-  - minimum area `3500 px`
-  - minimum circularity `0.55`
-  - minimum solidity `0.92`
-  - maximum aspect ratio `3.0`
-- The nucleus measurement export uses:
-  - minimum area `500 px`
-  - minimum circularity `0.55`
-  - minimum solidity `0.92`
-  - maximum aspect ratio `2.8`
+- `legacy_20260310/`
+- `output/archive_20260310_active_prune/`
+- `runs/segment/archive_20260310_active_prune/`
 
-## Next Steps
-
-1. Run the mixed stack on a larger, non-training manifest so the linkage quality is measured off the bootstrap tiles.
-2. Add a dedicated Cellpose tile measurement runner that predicts and measures in one step, instead of using a prediction bundle plus conversion step.
-3. Promote the mixed stack into one wrapper command for routine runs.
-4. Recompute image-level QC thresholds on the larger run, because the current "analysis ready" thresholds are based on only two source images.
-5. Keep the YOLO cell model as a benchmark and fallback, but treat Cellpose as the primary cell backend unless a larger held-out run reverses the result.
+Those are preserved for reference only and are not part of the active workflow.

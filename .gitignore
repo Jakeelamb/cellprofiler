@@ -49,6 +49,7 @@ Thumbs.db
 # Project specific
 input/
 output/
+results/
 data/
 logs/
 recovery/
@@ -67,6 +68,13 @@ test_filelist.txt
 *.ome.tif
 Process_*.tif
 Process_*.tiff
+
+# Binary artifacts
+*.hdf5
+*.h5
+*.pdf
+*.png
+*.jpg
 
 # Temporary files
 *.tmp

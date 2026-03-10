@@ -138,6 +138,8 @@ def main() -> None:
                 tile_gray=tile_gray,
                 i_bg=i_bg,
                 row=row,
+                source_image_path=raw_path,
+                run_manifest_path=args.output_dir / "summary.json",
                 object_kind="cell",
                 mask_path=mask_path,
                 tile_manifest_path=args.output_dir / "tile_manifest.csv",

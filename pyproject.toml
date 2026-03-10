@@ -6,12 +6,23 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "imagecodecs>=2025.8.2",
+    "matplotlib>=3.10.8",
     "numpy>=2.3.4",
+    "pandas>=2.3.3",
+    "Pillow>=11.3.0",
+    "scikit-image>=0.26.0",
+    "scipy>=1.17.0",
     "tifffile>=2025.10.16",
     "tqdm>=4.66.0",
     "PyYAML>=6.0",
+    "roifile>=2025.5.10",
     "psutil>=5.9.0",
     "zarr>=2.18.0",
+]
+
+[project.optional-dependencies]
+cellpose = [
+    "cellpose>=4.0.8",
 ]
 
 [build-system]

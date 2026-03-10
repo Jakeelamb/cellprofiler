@@ -79,7 +79,23 @@ def normalize_cells(df: pd.DataFrame, image_type: str) -> pd.DataFrame:
     out["tile_name"] = out["tile_name"].astype(str)
     out["mask_path"] = out["mask_path"].astype(str)
     out["raw_mask_path"] = out["raw_mask_path"].astype(str)
+    if "tile_manifest_path" not in out.columns:
+        out["tile_manifest_path"] = ""
+    if "source_image_path" not in out.columns:
+        out["source_image_path"] = ""
+    if "run_manifest_path" not in out.columns:
+        out["run_manifest_path"] = ""
+    out["tile_manifest_path"] = out["tile_manifest_path"].astype(str)
+    out["source_image_path"] = out["source_image_path"].astype(str)
+    out["run_manifest_path"] = out["run_manifest_path"].astype(str)
     out = out.rename(columns={"mask_path": "cell_mask_path", "raw_mask_path": "cell_raw_mask_path"})
+    out = out.rename(
+        columns={
+            "tile_manifest_path": "cell_tile_manifest_path",
+            "source_image_path": "cell_source_image_path",
+            "run_manifest_path": "cell_run_manifest_path",
+        }
+    )
     out["cell_object_id"] = (
         out["filename"].astype(str)
         + "::"
@@ -153,12 +169,25 @@ def normalize_nuclei(df: pd.DataFrame, image_type: str) -> pd.DataFrame:
         out["roi_zip_path"] = ""
     if "tile_manifest_path" not in out.columns:
         out["tile_manifest_path"] = ""
+    if "source_image_path" not in out.columns:
+        out["source_image_path"] = ""
+    if "run_manifest_path" not in out.columns:
+        out["run_manifest_path"] = ""
     if "raw_imagej_results_path" not in out.columns:
         out["raw_imagej_results_path"] = ""
     out["nucleus_mask_path"] = out["nucleus_mask_path"].astype(str)
     out["roi_zip_path"] = out["roi_zip_path"].astype(str)
     out["tile_manifest_path"] = out["tile_manifest_path"].astype(str)
+    out["source_image_path"] = out["source_image_path"].astype(str)
+    out["run_manifest_path"] = out["run_manifest_path"].astype(str)
     out["raw_imagej_results_path"] = out["raw_imagej_results_path"].astype(str)
+    out = out.rename(
+        columns={
+            "tile_manifest_path": "nucleus_tile_manifest_path",
+            "source_image_path": "nucleus_source_image_path",
+            "run_manifest_path": "nucleus_run_manifest_path",
+        }
+    )
     return out.reset_index(drop=True)
 
 
@@ -415,6 +444,7 @@ def link_nuclei_to_cells(
             "cell_object_id", "filename", "tile_name", "cell_mask_path", "mask_label_id",
             "area_px", "area_um2", "solidity", "circularity", "iod", "mean_od",
             "centroid_y", "centroid_x", "i_bg", "cell_equiv_radius_px",
+            "cell_tile_manifest_path", "cell_source_image_path", "cell_run_manifest_path",
         ]
     ].copy()
     cell_lookup = cell_lookup.rename(
