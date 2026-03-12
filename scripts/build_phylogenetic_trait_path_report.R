@@ -205,6 +205,114 @@ plot_trait_tree(species_df[[trait_columns[["nucleus"]]]], "Nucleus size mapped o
 plot_trait_tree(species_df[[trait_columns[["cell"]]]], "Cell size mapped on Desmognathus phylogeny", file.path(output_dir, "tree_cell_size.png"))
 plot_tree_tip_heatmap(file.path(output_dir, "tree_tip_heatmap.png"))
 
+pairwise_specs <- list(
+  list(
+    panel = "A. Genome size and nucleus size",
+    xvar = "log_genome",
+    yvar = "log_nucleus",
+    x_label = "Log10 genome size (pg)",
+    y_label = "Log10 nucleus area (um^2)"
+  ),
+  list(
+    panel = "B. Genome size and cell size",
+    xvar = "log_genome",
+    yvar = "log_cell",
+    x_label = "Log10 genome size (pg)",
+    y_label = "Log10 cell area (um^2)"
+  ),
+  list(
+    panel = "C. Nucleus size and cell size",
+    xvar = "log_nucleus",
+    yvar = "log_cell",
+    x_label = "Log10 nucleus area (um^2)",
+    y_label = "Log10 cell area (um^2)"
+  )
+)
+
+fit_pairwise_pgls <- function(spec) {
+  form <- as.formula(sprintf("%s ~ %s", spec$yvar, spec$xvar))
+  fit <- phylolm(form, data = species_df, phy = tree, model = "lambda")
+  sm <- summary(fit)$coefficients
+  data.frame(
+    panel = spec$panel,
+    xvar = spec$xvar,
+    yvar = spec$yvar,
+    x_label = spec$x_label,
+    y_label = spec$y_label,
+    intercept = sm["(Intercept)", "Estimate"],
+    slope = sm[spec$xvar, "Estimate"],
+    std_error = sm[spec$xvar, "StdErr"],
+    p_value = sm[spec$xvar, "p.value"],
+    lambda = unname(fit$optpar),
+    n_species = nrow(species_df),
+    stringsAsFactors = FALSE
+  )
+}
+
+pairwise_results <- do.call(rbind, lapply(pairwise_specs, fit_pairwise_pgls))
+write.csv(pairwise_results, file.path(output_dir, "pairwise_pgls_results.csv"), row.names = FALSE)
+
+make_pairwise_plot <- function(spec, fit_row) {
+  panel_df <- data.frame(
+    x = species_df[[spec$xvar]],
+    y = species_df[[spec$yvar]],
+    species = species_df$species,
+    n_pairs = species_df$n_pairs_strict_core,
+    stringsAsFactors = FALSE
+  )
+
+  x_seq <- seq(min(panel_df$x), max(panel_df$x), length.out = 100)
+  line_df <- data.frame(
+    x = x_seq,
+    y = fit_row$intercept + fit_row$slope * x_seq
+  )
+
+  ann_x <- min(panel_df$x) + 0.04 * diff(range(panel_df$x))
+  ann_y <- max(panel_df$y) - 0.06 * diff(range(panel_df$y))
+  ann_label <- sprintf(
+    "slope = %s\nP = %s\nlambda = %s\nn = %d",
+    formatC(fit_row$slope, digits = 3, format = "f"),
+    formatC(fit_row$p_value, digits = 3, format = "f"),
+    formatC(fit_row$lambda, digits = 3, format = "f"),
+    fit_row$n_species
+  )
+
+  ggplot(panel_df, aes(x = x, y = y)) +
+    geom_point(aes(size = n_pairs), shape = 21, stroke = 0.4, color = "#6e3b20", fill = "#c98d63", alpha = 0.88) +
+    geom_line(data = line_df, aes(x = x, y = y), inherit.aes = FALSE, color = "#a43224", linewidth = 1.1) +
+    annotate("text", x = ann_x, y = ann_y, label = ann_label, hjust = 0, vjust = 1, size = 3.5, family = "serif") +
+    scale_size_continuous(range = c(2.5, 7.5), guide = "none") +
+    labs(title = spec$panel, x = spec$x_label, y = spec$y_label) +
+    theme_classic(base_size = 12) +
+    theme(
+      plot.title = element_text(face = "bold", family = "serif", size = 12),
+      axis.title = element_text(family = "serif"),
+      axis.text = element_text(family = "serif")
+    )
+}
+
+pairwise_plots <- lapply(seq_along(pairwise_specs), function(i) {
+  make_pairwise_plot(pairwise_specs[[i]], pairwise_results[i, , drop = FALSE])
+})
+
+png(file.path(output_dir, "figure_2_pairwise_pgls.png"), width = 1800, height = 1400, res = 180)
+grid::grid.newpage()
+push_vp <- function(row, col) {
+  grid::viewport(layout.pos.row = row, layout.pos.col = col)
+}
+grid::pushViewport(grid::viewport(layout = grid::grid.layout(2, 2)))
+print(pairwise_plots[[1]], vp = push_vp(1, 1))
+print(pairwise_plots[[2]], vp = push_vp(1, 2))
+print(pairwise_plots[[3]], vp = push_vp(2, 1))
+grid::grid.text(
+  "Point size scales with the number of strict-core linked cell-nucleus pairs per species.",
+  x = 0.5,
+  y = 0.5,
+  gp = grid::gpar(fontsize = 12, col = "#5b4c3d", fontfamily = "serif"),
+  vp = push_vp(2, 2)
+)
+dev.off()
+
 model_specs <- list(
   G_to_N_to_C = list(z_nucleus = c("z_genome"), z_cell = c("z_nucleus")),
   G_to_C_to_N = list(z_cell = c("z_genome"), z_nucleus = c("z_cell")),
@@ -319,6 +427,145 @@ coef_plot <- ggplot(best_coef_df, aes(x = estimate, y = paste(response, "<-", te
   theme_minimal(base_size = 12)
 ggsave(file.path(output_dir, "best_model_coefficients.png"), coef_plot, width = 10, height = 4.8, dpi = 180)
 
+node_positions <- list(
+  z_genome = c(0.2, 0.78),
+  z_nucleus = c(0.8, 0.78),
+  z_cell = c(0.5, 0.24)
+)
+
+node_labels <- c(
+  z_genome = "Genome\nsize",
+  z_nucleus = "Nucleus\nsize",
+  z_cell = "Cell\nsize"
+)
+
+node_fill <- c(
+  z_genome = "#e8d4c1",
+  z_nucleus = "#efdcc8",
+  z_cell = "#f4e8d8"
+)
+
+draw_path_diagram <- function(spec, panel_title, footer_lines = character(0), highlight = FALSE, edge_label_map = NULL) {
+  plot.new()
+  plot.window(xlim = c(0, 1), ylim = c(0, 1))
+  border_col <- if (highlight) "#8c5632" else "#d7c6b1"
+  border_lwd <- if (highlight) 2.2 else 1.0
+  rect(0.03, 0.03, 0.97, 0.97, border = border_col, lwd = border_lwd, col = if (highlight) "#fcf6ee" else "#fffdfa")
+
+  text(0.05, 0.94, panel_title, adj = c(0, 1), cex = 0.92, font = 2)
+
+  for (node in names(node_positions)) {
+    xy <- node_positions[[node]]
+    symbols(xy[1], xy[2], circles = 0.09, inches = FALSE, bg = node_fill[[node]], fg = "#6d5138", add = TRUE)
+    text(xy[1], xy[2], node_labels[[node]], cex = 0.82)
+  }
+
+  for (response in names(spec)) {
+    for (predictor in spec[[response]]) {
+      from_xy <- node_positions[[predictor]]
+      to_xy <- node_positions[[response]]
+      arrows(from_xy[1], from_xy[2], to_xy[1], to_xy[2], length = 0.09, lwd = 2.2, col = "#8c5632")
+      label_key <- paste(response, predictor, sep = "|")
+      if (!is.null(edge_label_map) && label_key %in% names(edge_label_map)) {
+        mid_x <- (from_xy[1] + to_xy[1]) / 2
+        mid_y <- (from_xy[2] + to_xy[2]) / 2 + ifelse(from_xy[2] == to_xy[2], 0.06, 0.04)
+        text(mid_x, mid_y, edge_label_map[[label_key]], cex = 0.72, col = "#6d5138")
+      }
+    }
+  }
+
+  if (length(footer_lines)) {
+    text(0.05, 0.11, paste(footer_lines, collapse = "\n"), adj = c(0, 0), cex = 0.76, col = "#5b4c3d")
+  }
+}
+
+model_display_name <- c(
+  G_to_N_to_C = "Genome -> Nucleus -> Cell",
+  G_to_C_to_N = "Genome -> Cell -> Nucleus",
+  G_to_both = "Genome -> Nucleus; Genome -> Cell",
+  G_to_both_plus_N_to_C = "Genome -> Nucleus; Genome + Nucleus -> Cell",
+  G_to_both_plus_C_to_N = "Genome -> Cell; Genome + Cell -> Nucleus"
+)
+
+png(file.path(output_dir, "figure_3_candidate_path_models.png"), width = 1800, height = 1250, res = 180)
+par(mfrow = c(2, 3), mar = c(0.4, 0.4, 1.2, 0.4))
+for (i in seq_len(nrow(model_scores))) {
+  row <- model_scores[i, , drop = FALSE]
+  footer <- c(
+    sprintf("AICc = %s", formatC(row$AICc, digits = 2, format = "f")),
+    sprintf("weight = %s", formatC(row$model_weight, digits = 3, format = "f"))
+  )
+  draw_path_diagram(
+    model_specs[[row$model]],
+    panel_title = sprintf("%s. %s", LETTERS[i], model_display_name[[row$model]]),
+    footer_lines = footer,
+    highlight = identical(row$model[[1]], best_model)
+  )
+}
+plot.new()
+text(
+  0.05, 0.95,
+  "Models are ranked by summed phylogenetic GLS AICc.\nThe highlighted panel is the best-supported topology.",
+  adj = c(0, 1),
+  cex = 1.0,
+  col = "#5b4c3d"
+)
+dev.off()
+
+best_edge_labels <- setNames(
+  sprintf(
+    "beta = %s\nP = %s",
+    formatC(best_coef_df$estimate, digits = 2, format = "f"),
+    formatC(best_coef_df$p_value, digits = 3, format = "f")
+  ),
+  paste(best_coef_df$response, best_coef_df$term, sep = "|")
+)
+
+coef_term_map <- c(
+  "z_nucleus|z_genome" = "Genome -> Nucleus",
+  "z_cell|z_nucleus" = "Nucleus -> Cell",
+  "z_cell|z_genome" = "Genome -> Cell"
+)
+coef_terms <- unname(coef_term_map[paste(best_coef_df$response, best_coef_df$term, sep = "|")])
+coef_terms[is.na(coef_terms)] <- paste(best_coef_df$term, "->", best_coef_df$response)
+
+png(file.path(output_dir, "figure_4_best_model.png"), width = 1800, height = 900, res = 180)
+layout(matrix(c(1, 2), nrow = 1), widths = c(1.05, 1.25))
+par(mar = c(0.6, 0.6, 1.4, 0.6))
+draw_path_diagram(
+  model_specs[[best_model]],
+  panel_title = sprintf("A. Best-supported path model: %s", model_display_name[[best_model]]),
+  footer_lines = c(
+    sprintf("AICc = %s", formatC(model_scores$AICc[[1]], digits = 2, format = "f")),
+    sprintf("weight = %s", formatC(model_scores$model_weight[[1]], digits = 3, format = "f"))
+  ),
+  highlight = TRUE,
+  edge_label_map = best_edge_labels
+)
+
+par(mar = c(4.5, 6.5, 1.4, 1.5))
+ci_low <- best_coef_df$estimate - 1.96 * best_coef_df$std_error
+ci_high <- best_coef_df$estimate + 1.96 * best_coef_df$std_error
+y_pos <- seq_along(best_coef_df$estimate)
+plot(
+  best_coef_df$estimate,
+  y_pos,
+  xlim = range(c(ci_low, ci_high, 0)),
+  ylim = c(0.5, length(y_pos) + 0.5),
+  yaxt = "n",
+  ylab = "",
+  xlab = "Standardized coefficient (95% CI)",
+  pch = 21,
+  bg = "#8c5632",
+  col = "#8c5632",
+  cex = 1.3,
+  main = "B. Best-model path coefficients"
+)
+segments(ci_low, y_pos, ci_high, y_pos, lwd = 2.4, col = "#c58c63")
+abline(v = 0, lty = 2, col = "#cdb8a3")
+axis(2, at = y_pos, labels = coef_terms, las = 1)
+dev.off()
+
 fmt_num <- function(x, digits = 3) {
   ifelse(is.na(x), "NA", formatC(x, digits = digits, format = "f"))
 }
@@ -338,7 +585,15 @@ signal_html$lambda <- fmt_num(signal_html$lambda)
 signal_html$AIC <- fmt_num(signal_html$AIC)
 signal_html$sigma2 <- fmt_num(signal_html$sigma2)
 
+pairwise_html <- pairwise_results
+pairwise_html$slope <- fmt_num(pairwise_html$slope)
+pairwise_html$std_error <- fmt_num(pairwise_html$std_error)
+pairwise_html$p_value <- fmt_num(pairwise_html$p_value)
+pairwise_html$lambda <- fmt_num(pairwise_html$lambda)
+pairwise_html$n_species <- as.integer(pairwise_html$n_species)
+
 scores_html <- model_scores
+scores_html$model_label <- unname(model_display_name[scores_html$model])
 scores_html$AICc <- fmt_num(scores_html$AICc)
 scores_html$delta_AICc <- fmt_num(scores_html$delta_AICc)
 scores_html$model_weight <- fmt_num(scores_html$model_weight)
@@ -369,106 +624,156 @@ missing_html <- if (length(missing_species)) {
   data.frame(species = "None", stringsAsFactors = FALSE)
 }
 
+missing_species_text <- if (length(missing_species)) {
+  paste(missing_species, collapse = ", ")
+} else {
+  "None"
+}
+
 html <- sprintf(
 '<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Phylogenetic Trait and Path Report</title>
+  <title>Desmognathus Trait Phylogeny Report</title>
   <style>
-    :root { --bg:#f3ecdf; --panel:#fffcf8; --ink:#2e261d; --muted:#70604d; --line:#d7c6b1; --accent:#8c5632; }
-    body { margin:0; color:var(--ink); background:linear-gradient(180deg,#f8f3eb 0%%, var(--bg) 100%%); font:15px/1.55 Georgia, serif; }
-    .wrap { max-width:1520px; margin:0 auto; padding:24px; }
-    .hero, .card, table { background:var(--panel); border:1px solid var(--line); border-radius:18px; box-shadow:0 12px 28px rgba(43,31,19,0.06); }
-    .hero, .card { padding:18px; }
-    .grid, .fig-grid { display:grid; gap:14px; margin:18px 0 24px; }
-    .grid { grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); }
-    .fig-grid { grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); }
-    .metric-label { color:var(--muted); text-transform:uppercase; letter-spacing:.08em; font-size:12px; }
-    .metric-value { margin-top:10px; color:var(--accent); font-size:28px; }
-    .links a { display:inline-block; margin:0 10px 10px 0; padding:8px 12px; border-radius:999px; background:#efe1d2; border:1px solid #dfc9b5; color:var(--ink); text-decoration:none; }
-    img { width:100%%; height:auto; display:block; border-radius:12px; border:1px solid #e4d7ca; background:#faf5ef; }
-    table { width:100%%; border-collapse:collapse; overflow:hidden; margin-bottom:24px; }
-    th, td { padding:8px 10px; border-bottom:1px solid var(--line); text-align:left; font-size:13px; }
-    th { background:#f1e3d5; }
-    .note { color:var(--muted); }
+    :root { --ink:#241d17; --muted:#66584a; --line:#d9ccbf; --accent:#8c5632; --paper:#fffdfa; }
+    html, body { margin: 0; padding: 0; background: #f7f3ee; color: var(--ink); }
+    body { font: 16px/1.65 Georgia, serif; }
+    main { max-width: 980px; margin: 0 auto; padding: 40px 28px 56px; background: var(--paper); box-shadow: 0 8px 30px rgba(33, 23, 14, 0.06); }
+    h1, h2, h3 { font-weight: 600; }
+    h1 { margin: 0 0 10px; font-size: 2.2rem; line-height: 1.2; text-align: center; }
+    h2 { margin: 34px 0 14px; font-size: 1.2rem; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+    p { margin: 0 0 14px; }
+    .eyebrow { text-align: center; text-transform: uppercase; letter-spacing: 0.14em; color: var(--muted); font-size: 0.75rem; margin-bottom: 10px; }
+    .subhead { text-align: center; color: var(--muted); margin-bottom: 24px; }
+    .summary { border-top: 2px solid #cdb8a3; border-bottom: 2px solid #cdb8a3; padding: 18px 0 6px; margin-bottom: 26px; }
+    .links { margin: 18px 0 8px; }
+    .links a { display: inline-block; margin: 0 10px 10px 0; color: var(--accent); text-decoration: none; border-bottom: 1px solid #ccb39e; }
+    .figure { margin: 30px 0 36px; }
+    .figure img { width: 100%%; height: auto; display: block; border: 1px solid var(--line); background: white; }
+    .figcaption { margin-top: 10px; font-size: 0.93rem; color: #43372d; }
+    .table-wrap { overflow-x: auto; margin: 12px 0 24px; }
+    table { width: 100%%; border-collapse: collapse; }
+    th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; font-size: 0.9rem; }
+    th { font-size: 0.82rem; letter-spacing: 0.03em; text-transform: uppercase; color: var(--muted); }
+    .note { color: var(--muted); font-size: 0.92rem; }
+    .supp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-top: 12px; }
+    .supp-grid figure { margin: 0; }
+    .supp-grid figcaption { font-size: 0.83rem; color: var(--muted); margin-top: 6px; }
+    .mono { font-family: "SFMono-Regular", Menlo, Consolas, monospace; font-size: 0.9em; }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <section class="hero">
-      <h1>Phylogenetic Trait and Path Report</h1>
-      <p>Species-level medians from the bg-clean linked cell-nucleus dataset are mapped onto the existing local <em>Desmognathus</em> backbone tree used in the companion phylogeny workflow. This report therefore reuses that curated salamander tree rather than the incomplete OpenTree fallback.</p>
-      <p class="note">Traits analyzed here are median strict-core species values for genome size, nucleus size, and cell size. Path models are compared as summed phylogenetic generalized least squares regressions with Pagel\'s lambda estimated per equation. Species absent from the local backbone are listed below and excluded from tree-based inference.</p>
+  <main>
+    <header>
+      <div class="eyebrow">Comparative Phylogenetic Analysis</div>
+      <h1>Genome size, nucleus size, and cell size track one another across <em>Desmognathus</em></h1>
+      <p class="subhead">bg-clean linked cell-nucleus medians analyzed on the local curated salamander backbone</p>
+    </header>
+
+    <section class="summary">
+      <p>%d species were supplied to the report and %d were represented in the phylogeny. The best-supported path model was <span class="mono">%s</span> with AICc %s and model weight %s, consistent with genome size covarying most strongly with nucleus size and nucleus size then tracking cell size.</p>
+      <p class="note">Species excluded from tree-based inference: %s.</p>
       <div class="links">
         <a href="summary.json">summary json</a>
-        <a href="species_tree_coverage.csv">tree coverage</a>
-        <a href="trait_phylogenetic_signal.csv">trait phylogenetic signal</a>
-        <a href="path_model_scores.csv">path model scores</a>
-        <a href="path_model_coefficients.csv">path coefficients</a>
-        <a href="path_model_dsep.csv">path d-sep checks</a>
+        <a href="pairwise_pgls_results.csv">pairwise PGLS csv</a>
+        <a href="path_model_scores.csv">path model ranking csv</a>
+        <a href="path_model_coefficients.csv">path coefficients csv</a>
+        <a href="species_tree_coverage.csv">tree coverage csv</a>
         <a href="source_tree_full.nwk">source tree</a>
         <a href="analysis_tree_pruned.nwk">analysis tree</a>
       </div>
     </section>
-    <section class="grid">
-      <div class="card"><div class="metric-label">Input species</div><div class="metric-value">%d</div></div>
-      <div class="card"><div class="metric-label">Species in tree</div><div class="metric-value">%d</div></div>
-      <div class="card"><div class="metric-label">Excluded from tree</div><div class="metric-value">%d</div></div>
-      <div class="card"><div class="metric-label">Best path model</div><div class="metric-value" style="font-size:22px">%s</div></div>
-      <div class="card"><div class="metric-label">Best model AICc</div><div class="metric-value">%s</div></div>
-      <div class="card"><div class="metric-label">Best model weight</div><div class="metric-value">%s</div></div>
+
+    <section class="figure">
+      <img src="tree_tip_heatmap.png" alt="Trait heat strips across the Desmognathus phylogeny">
+      <div class="figcaption"><strong>Figure 1.</strong> Phylogenetic distribution of species-level medians for genome size, nucleus size, and cell size. Each tip is annotated with aligned trait strips so the three linked traits can be compared directly across the salamander backbone.</div>
     </section>
-    <section class="fig-grid">
-      <div class="card"><a href="tree_tip_heatmap.png"><img src="tree_tip_heatmap.png" alt="Trait heatmap tree"></a></div>
-      <div class="card"><a href="tree_genome_size.png"><img src="tree_genome_size.png" alt="Genome tree"></a></div>
-      <div class="card"><a href="tree_nucleus_size.png"><img src="tree_nucleus_size.png" alt="Nucleus tree"></a></div>
-      <div class="card"><a href="tree_cell_size.png"><img src="tree_cell_size.png" alt="Cell tree"></a></div>
-      <div class="card"><a href="path_model_scores.png"><img src="path_model_scores.png" alt="Path model scores"></a></div>
-      <div class="card"><a href="best_model_coefficients.png"><img src="best_model_coefficients.png" alt="Best model coefficients"></a></div>
+
+    <section class="figure">
+      <img src="figure_2_pairwise_pgls.png" alt="Pairwise phylogenetic GLS relationships among genome size, nucleus size, and cell size">
+      <div class="figcaption"><strong>Figure 2.</strong> Pairwise phylogenetic GLS relationships among the three linked traits. Each panel shows one phylogenetically corrected regression using species medians; point size scales with the number of strict-core linked cell-nucleus pairs contributing to that species estimate.</div>
     </section>
+
+    <section class="figure">
+      <img src="figure_3_candidate_path_models.png" alt="Candidate path model comparison">
+      <div class="figcaption"><strong>Figure 3.</strong> Candidate phylogenetic path models ranked by summed PGLS AICc. The highlighted model had the strongest support among the tested hypotheses.</div>
+    </section>
+
+    <section class="figure">
+      <img src="figure_4_best_model.png" alt="Best-supported path model and coefficients">
+      <div class="figcaption"><strong>Figure 4.</strong> Best-supported path model and standardized path coefficients. Arrow labels in the left panel show coefficient estimates and P-values for the retained paths, and the right panel shows coefficient uncertainty as 95%% confidence intervals.</div>
+    </section>
+
     <section>
-      <h2>Species excluded from phylogenetic inference</h2>
-      <table>
-        <tr><th>Species</th></tr>
-        %s
-      </table>
+      <h2>Table 1. Pairwise PGLS Results</h2>
+      <div class="table-wrap">
+        <table>
+          <tr><th>Panel</th><th>Slope</th><th>Std. error</th><th>P-value</th><th>Lambda</th><th>Species</th></tr>
+          %s
+        </table>
+      </div>
     </section>
+
     <section>
-      <h2>Trait phylogenetic signal</h2>
-      <table>
-        <tr><th>Trait</th><th>Lambda</th><th>AIC</th><th>Sigma2</th></tr>
-        %s
-      </table>
+      <h2>Table 2. Candidate Path-Model Ranking</h2>
+      <div class="table-wrap">
+        <table>
+          <tr><th>Model</th><th>AICc</th><th>Delta AICc</th><th>Weight</th><th>Equations</th></tr>
+          %s
+        </table>
+      </div>
     </section>
+
     <section>
-      <h2>Path model comparison</h2>
-      <table>
-        <tr><th>Model</th><th>Equations</th><th>AICc</th><th>Delta AICc</th><th>Weight</th></tr>
-        %s
-      </table>
+      <h2>Coverage And Diagnostics</h2>
+      <p class="note">Species excluded from the phylogenetic backbone are listed separately because they contribute descriptive linked-trait summaries but not phylogenetically corrected estimates.</p>
+      <div class="table-wrap">
+        <table>
+          <tr><th>Species excluded from tree-based inference</th></tr>
+          %s
+        </table>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <tr><th>Trait</th><th>Lambda</th><th>AIC</th><th>Sigma2</th></tr>
+          %s
+        </table>
+      </div>
     </section>
+
     <section>
-      <h2>Best-model standardized coefficients</h2>
-      <table>
-        <tr><th>Response</th><th>Predictor</th><th>Estimate</th><th>Std error</th><th>p-value</th><th>Lambda</th></tr>
-        %s
-      </table>
+      <h2>Supplementary Figures</h2>
+      <div class="supp-grid">
+        <figure>
+          <a href="tree_genome_size.png"><img src="tree_genome_size.png" alt="Genome size mapped on the tree"></a>
+          <figcaption>Supplementary Figure S1. Genome size mapped alone on the pruned phylogeny.</figcaption>
+        </figure>
+        <figure>
+          <a href="tree_nucleus_size.png"><img src="tree_nucleus_size.png" alt="Nucleus size mapped on the tree"></a>
+          <figcaption>Supplementary Figure S2. Nucleus size mapped alone on the pruned phylogeny.</figcaption>
+        </figure>
+        <figure>
+          <a href="tree_cell_size.png"><img src="tree_cell_size.png" alt="Cell size mapped on the tree"></a>
+          <figcaption>Supplementary Figure S3. Cell size mapped alone on the pruned phylogeny.</figcaption>
+        </figure>
+      </div>
     </section>
-  </div>
+  </main>
 </body>
 </html>',
   nrow(coverage_df),
   nrow(species_df),
-  length(missing_species),
   best_model,
   fmt_num(report_summary$best_model_AICc),
   fmt_num(report_summary$best_model_weight),
+  missing_species_text,
+  table_rows(pairwise_html[, c("panel", "slope", "std_error", "p_value", "lambda", "n_species"), drop = FALSE], c("panel", "slope", "std_error", "p_value", "lambda", "n_species")),
+  table_rows(scores_html[, c("model_label", "AICc", "delta_AICc", "model_weight", "equations"), drop = FALSE], c("model_label", "AICc", "delta_AICc", "model_weight", "equations")),
   table_rows(missing_html[, c("species"), drop = FALSE], c("species")),
-  table_rows(signal_html[, c("trait_label", "lambda", "AIC", "sigma2"), drop = FALSE], c("trait_label", "lambda", "AIC", "sigma2")),
-  table_rows(scores_html[, c("model", "equations", "AICc", "delta_AICc", "model_weight"), drop = FALSE], c("model", "equations", "AICc", "delta_AICc", "model_weight")),
-  table_rows(coef_html[, c("response", "term", "estimate", "std_error", "p_value", "lambda"), drop = FALSE], c("response", "term", "estimate", "std_error", "p_value", "lambda"))
+  table_rows(signal_html[, c("trait_label", "lambda", "AIC", "sigma2"), drop = FALSE], c("trait_label", "lambda", "AIC", "sigma2"))
 )
 
 writeLines(html, file.path(output_dir, "index.html"))
