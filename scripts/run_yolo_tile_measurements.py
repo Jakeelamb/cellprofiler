@@ -33,6 +33,7 @@ CELL_COLUMNS = [
     "centroid_y",
     "centroid_x",
     "i_bg",
+    "i_bg_source",
     "tile_name",
     "tile_y0",
     "tile_x0",
@@ -63,6 +64,7 @@ NUCLEUS_COLUMNS = [
     "centroid_x",
     "centroid_y",
     "i_bg",
+    "i_bg_source",
     "tile_name",
     "tile_y0",
     "tile_x0",
@@ -89,6 +91,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--object-kind", choices=["cell", "nucleus"], required=True)
     parser.add_argument("--image-type", default="brightfield", choices=["brightfield"])
     parser.add_argument("--background-cache", type=Path, default=None)
+    parser.add_argument(
+        "--allow-missing-background-cache",
+        action="store_true",
+        help="Permit per-tile 95th-percentile background fallback when the source image is absent from the cache.",
+    )
     parser.add_argument("--patch-size", type=int, default=1024)
     parser.add_argument("--stride", type=int, default=1024)
     parser.add_argument("--imgsz", type=int, default=1024)
@@ -148,11 +155,22 @@ def grayscale_uint8(image: np.ndarray) -> np.ndarray:
     return arr
 
 
-def tile_background(tile_gray: np.ndarray, filename: str, cache: dict[str, int]) -> float:
+def tile_background(
+    tile_gray: np.ndarray,
+    filename: str,
+    cache: dict[str, int],
+    *,
+    allow_missing_cache: bool,
+) -> tuple[float, str]:
     cached = cache.get(filename)
     if cached is not None:
-        return float(cached)
-    return float(max(1.0, np.percentile(tile_gray, 95)))
+        return float(cached), "image_cache"
+    if not allow_missing_cache:
+        raise KeyError(
+            f"Missing cached I_bg for {filename!r}. "
+            "Provide a complete --background-cache or pass --allow-missing-background-cache."
+        )
+    return float(max(1.0, np.percentile(tile_gray, 95))), "tile_p95_fallback"
 
 
 def measure_objects(
@@ -160,6 +178,7 @@ def measure_objects(
     mask: np.ndarray,
     tile_gray: np.ndarray,
     i_bg: float,
+    i_bg_source: str,
     row: dict[str, str],
     source_image_path: Path,
     run_manifest_path: Path,
@@ -205,6 +224,7 @@ def measure_objects(
                     "centroid_y": round(centroid_y, 2),
                     "centroid_x": round(centroid_x, 2),
                     "i_bg": round(i_bg, 4),
+                    "i_bg_source": i_bg_source,
                     "tile_name": tile_name,
                     "tile_y0": tile_y0,
                     "tile_x0": tile_x0,
@@ -237,6 +257,7 @@ def measure_objects(
                     "centroid_x": round(centroid_x, 2),
                     "centroid_y": round(centroid_y, 2),
                     "i_bg": round(i_bg, 4),
+                    "i_bg_source": i_bg_source,
                     "tile_name": tile_name,
                     "tile_y0": tile_y0,
                     "tile_x0": tile_x0,
@@ -281,11 +302,19 @@ def main() -> None:
     device = choose_device(args.device)
     model = YOLO(str(args.model))
     bg_cache = load_background_cache(args.background_cache)
+    require_cached_bg = args.object_kind == "nucleus" and not args.allow_missing_background_cache
+    if require_cached_bg and not bg_cache:
+        raise ValueError(
+            "Nucleus IOD measurement requires a populated --background-cache unless "
+            "--allow-missing-background-cache is set."
+        )
 
     all_measurements: list[dict[str, object]] = []
     tile_manifest_rows: list[dict[str, object]] = []
     total_instances = 0
     total_positive_pixels = 0
+    missing_bg_filenames: set[str] = set()
+    bg_source_counts: dict[str, int] = {}
 
     for row in rows:
         image_name = row_image_name(args.manifest, row)
@@ -337,12 +366,23 @@ def main() -> None:
         )
 
         tile_gray = grayscale_uint8(image)
-        i_bg = tile_background(tile_gray, filename, bg_cache)
+        try:
+            i_bg, i_bg_source = tile_background(
+                tile_gray,
+                filename,
+                bg_cache,
+                allow_missing_cache=not require_cached_bg,
+            )
+        except KeyError:
+            missing_bg_filenames.add(filename)
+            raise
+        bg_source_counts[i_bg_source] = bg_source_counts.get(i_bg_source, 0) + 1
         all_measurements.extend(
             measure_objects(
                 mask=full_mask,
                 tile_gray=tile_gray,
                 i_bg=i_bg,
+                i_bg_source=i_bg_source,
                 row=row,
                 source_image_path=raw_path,
                 run_manifest_path=args.output_dir / "summary.json",
@@ -362,6 +402,10 @@ def main() -> None:
         "output_dir": str(args.output_dir.resolve()),
         "object_kind": args.object_kind,
         "image_type": args.image_type,
+        "background_cache": str(args.background_cache.resolve()) if args.background_cache else "",
+        "allow_missing_background_cache": bool(args.allow_missing_background_cache),
+        "bg_source_counts": bg_source_counts,
+        "n_missing_bg_filenames": len(missing_bg_filenames),
         "device": device,
         "n_tiles": len(rows),
         "n_objects": len(all_measurements),

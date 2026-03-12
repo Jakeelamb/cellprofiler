@@ -43,6 +43,7 @@ This is the retained working set for the salamander brightfield pipeline that pr
 - `scripts/prepare_mixed_linkage_tiles.py`
 - `scripts/run_yolo_tile_measurements.py`
 - `scripts/build_cell_nucleus_linkage_report.py`
+- `scripts/build_species_linked_stats_report.py`
 
 ### Shared support
 

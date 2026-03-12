@@ -21,6 +21,7 @@ Key active entrypoints:
 - [nucleus_iod_estimate_pipeline/run_from_manifest.py](/home/jake/Projects/cellprofiler_test/nucleus_iod_estimate_pipeline/run_from_manifest.py)
 - [scripts/run_yolo_tile_measurements.py](/home/jake/Projects/cellprofiler_test/scripts/run_yolo_tile_measurements.py)
 - [scripts/build_cell_nucleus_linkage_report.py](/home/jake/Projects/cellprofiler_test/scripts/build_cell_nucleus_linkage_report.py)
+- [scripts/build_species_linked_stats_report.py](/home/jake/Projects/cellprofiler_test/scripts/build_species_linked_stats_report.py)
 
 Current full-dataset mixed outputs:
 
