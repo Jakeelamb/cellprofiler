@@ -15,7 +15,7 @@ default_master_csv <- file.path(
   project_root, "output", "runs", "mixed_cellpose_yolo_full_dataset_v1_bgclean",
   "integrated_multinode_phylo", "integrated_master_observed.csv"
 )
-default_tree_file <- file.path(dirname(project_root), "Desmognathus_TE", "results", "phylogeny", "processed_phylogeny.nwk")
+default_tree_file <- file.path(dirname(project_root), "Desmognathus_TE", "input_data", "phylogeny", "desmo900dated_test.tre")
 default_output_dir <- file.path(
   project_root, "output", "runs", "mixed_cellpose_yolo_full_dataset_v1_bgclean",
   "integrated_multinode_phylo"
@@ -40,6 +40,12 @@ standardize_species <- function(x) {
   x <- gsub("_", " ", x)
   x <- sub("^Desmognathus\\s+", "", x, ignore.case = TRUE)
   x <- sub("^D[.]?\\s*", "", x)
+  tolower(trimws(x))
+}
+
+standardize_tree_tip <- function(x) {
+  x <- standardize_species(x)
+  x <- sub("\\s+[A-Z0-9]+$", "", x)
   trimws(x)
 }
 
@@ -114,15 +120,31 @@ for (col in colnames(master_df)) {
 }
 master_df$species_key <- standardize_species(master_df$species)
 master_df$species_display <- display_species(master_df$species)
+all_species_keys <- unique(master_df$species_key)
 
 tree <- read.tree(tree_file)
-tree$tip.label <- standardize_species(tree$tip.label)
-master_df <- master_df[master_df$species_key %in% tree$tip.label, , drop = FALSE]
-tree <- keep.tip(tree, intersect(tree$tip.label, master_df$species_key))
+raw_tree_tip_count <- length(tree$tip.label)
+tree$tip.label <- standardize_tree_tip(tree$tip.label)
+tree <- keep.tip(tree, which(tree$tip.label %in% all_species_keys))
+duplicate_tip_labels <- unique(tree$tip.label[duplicated(tree$tip.label)])
+if (length(duplicate_tip_labels)) {
+  tree <- drop.tip(tree, which(duplicated(tree$tip.label)))
+}
 tree <- collapse.singles(tree)
+missing_tree_species <- setdiff(all_species_keys, tree$tip.label)
+master_df <- master_df[master_df$species_key %in% tree$tip.label, , drop = FALSE]
 master_df <- master_df[match(tree$tip.label, master_df$species_key), , drop = FALSE]
 row.names(master_df) <- master_df$species_key
 tree$tip.label <- master_df$species_key
+
+coverage_df <- data.frame(
+  species_key = sort(all_species_keys),
+  species_display = display_species(sort(all_species_keys)),
+  in_tree = sort(all_species_keys) %in% tree$tip.label,
+  stringsAsFactors = FALSE
+)
+write.csv(coverage_df, file.path(output_dir, "species_tree_coverage.csv"), row.names = FALSE)
+write.tree(tree, file.path(output_dir, "analysis_tree_complete.nwk"))
 
 if (is.null(tree$edge.length) || anyNA(tree$edge.length) || all(tree$edge.length == 0)) {
   tree <- compute.brlen(tree, method = "Grafen")
@@ -818,7 +840,12 @@ if (nrow(best_coeff_summary)) {
 }
 
 summary_json <- list(
+  source_tree_tip_count = raw_tree_tip_count,
   n_species_tree = nrow(master_df),
+  n_species_master_total = length(all_species_keys),
+  n_species_missing_from_tree = length(missing_tree_species),
+  missing_tree_species = unname(display_species(missing_tree_species)),
+  duplicate_tree_labels_collapsed = unname(display_species(duplicate_tip_labels)),
   n_species_with_current_cellprofiler_updates = 0,
   n_families = length(family_configs),
   n_best_models = nrow(best_model_summary),
