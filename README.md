@@ -22,6 +22,8 @@ Key active entrypoints:
 - [scripts/run_yolo_tile_measurements.py](/home/jake/Projects/cellprofiler_test/scripts/run_yolo_tile_measurements.py)
 - [scripts/build_cell_nucleus_linkage_report.py](/home/jake/Projects/cellprofiler_test/scripts/build_cell_nucleus_linkage_report.py)
 - [scripts/build_species_linked_stats_report.py](/home/jake/Projects/cellprofiler_test/scripts/build_species_linked_stats_report.py)
+- [scripts/run_linked_pair_review.py](/home/jake/Projects/cellprofiler_test/scripts/run_linked_pair_review.py)
+- [scripts/apply_pair_review_repairs.py](/home/jake/Projects/cellprofiler_test/scripts/apply_pair_review_repairs.py)
 
 Current full-dataset mixed outputs:
 

@@ -115,6 +115,51 @@ The final linked table keeps:
 - object IDs
 - overlap/linkage statistics
 
+## Manual Pair Review
+
+For pair-by-pair validation before downstream reporting, launch the local reviewer:
+
+```bash
+python3 scripts/run_linked_pair_review.py \
+  --pairs-csv output/runs/<run_tag>/linkage/linked_nucleus_pairs.csv.gz \
+  --selection strict_core
+```
+
+The reviewer serves one linked pair at a time with:
+
+- raw crop on one side
+- cell+nucleus mask overlay on the other
+- hotkeys for `keep`, `discard`, `maybe`, and `repair`
+- shape-QC filters for jagged edges, low-solidity masks, and ellipse mismatch
+- `J` hotkey to jump to the next shape-suspect pair
+- `O`, `C`, `N`, and `B`/`V` hotkeys to compare original, cell-only, nucleus-only, and both-repaired overlays
+- decisions saved to `output/runs/<run_tag>/pair_review/decisions.csv`
+
+To materialize approved `repair` decisions into real repaired mask tiles and a patched linkage table:
+
+```bash
+python3 scripts/apply_pair_review_repairs.py \
+  --linked-pairs-csv output/runs/<run_tag>/linkage/linked_nucleus_pairs.csv.gz \
+  --cell-linkage-csv output/runs/<run_tag>/linkage/cell_linkage_summary.csv.gz \
+  --decisions-csv output/runs/<run_tag>/pair_review/decisions.csv \
+  --output-dir output/runs/<run_tag>/pair_review/applied_repairs
+```
+
+This writes:
+
+- repaired cell and nucleus label tiles
+- `linked_nucleus_pairs_reviewed.csv.gz` with repaired measurements and manual keep/discard overrides
+- `cell_linkage_summary_reviewed.csv.gz`
+- `repair_manifest.csv`
+
+You can then rebuild the linked species report against the reviewed table:
+
+```bash
+python3 scripts/build_species_linked_stats_report.py \
+  --linked-pairs-csv output/runs/<run_tag>/pair_review/applied_repairs/linked_nucleus_pairs_reviewed.csv.gz \
+  --output-dir output/runs/<run_tag>/linked_species_stats_reviewed
+```
+
 ## Archive Rule
 
 Historical scripts, docs, experiments, and older outputs were moved to:
