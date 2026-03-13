@@ -88,11 +88,19 @@ fmt_num <- function(x, digits = 3) {
   ifelse(is.na(x), "NA", formatC(x, digits = digits, format = "f"))
 }
 
+html_escape <- function(x) {
+  x <- as.character(x)
+  x <- gsub("&", "&amp;", x, fixed = TRUE)
+  x <- gsub("<", "&lt;", x, fixed = TRUE)
+  x <- gsub(">", "&gt;", x, fixed = TRUE)
+  x
+}
+
 table_rows <- function(df, cols) {
   out <- character(0)
   for (i in seq_len(nrow(df))) {
     row <- df[i, , drop = FALSE]
-    cells <- vapply(cols, function(col) sprintf("<td>%s</td>", row[[col]][[1]]), character(1))
+    cells <- vapply(cols, function(col) sprintf("<td>%s</td>", html_escape(row[[col]][[1]])), character(1))
     out <- c(out, sprintf("<tr>%s</tr>", paste(cells, collapse = "")))
   }
   paste(out, collapse = "\n")
@@ -875,14 +883,32 @@ if (nrow(best_model_html)) {
   best_model_html$model_weight <- fmt_num(best_model_html$model_weight)
 }
 
-html <- sprintf(
-'<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Integrated Desmognathus Phylogenetic Path Report</title>
-  <style>
+best_coeff_html <- best_coeff_summary
+if (nrow(best_coeff_html)) {
+  best_coeff_html$edge <- paste(best_coeff_html$response, "<-", best_coeff_html$term)
+  best_coeff_html$ci_low <- best_coeff_html$estimate - 1.96 * best_coeff_html$std_error
+  best_coeff_html$ci_high <- best_coeff_html$estimate + 1.96 * best_coeff_html$std_error
+  best_coeff_html$estimate <- fmt_num(best_coeff_html$estimate)
+  best_coeff_html$std_error <- fmt_num(best_coeff_html$std_error)
+  best_coeff_html$p_value <- fmt_num(best_coeff_html$p_value)
+  best_coeff_html$lambda <- fmt_num(best_coeff_html$lambda)
+  best_coeff_html$ci95 <- sprintf("[%s, %s]", fmt_num(best_coeff_html$ci_low), fmt_num(best_coeff_html$ci_high))
+}
+
+observed_best_model_html <- subset(best_model_html, mode == "observed")
+phylofill_best_model_html <- subset(best_model_html, mode == "phylofill")
+observed_best_coeff_html <- subset(best_coeff_html, mode == "observed")
+phylofill_best_coeff_html <- subset(best_coeff_html, mode == "phylofill")
+observed_panel_html <- subset(panel_html, mode == "observed")
+phylofill_panel_html <- subset(panel_html, mode == "phylofill")
+
+table_1_cols <- c("family_label", "model", "n_species", "AICc", "model_weight", "equations")
+table_2_cols <- c("family_label", "edge", "estimate", "std_error", "ci95", "p_value", "lambda")
+table_3_cols <- c("family_label", "n_species", "species_list")
+table_s3_cols <- c("label", "type", "observed_n", "imputed_n", "total_n", "cv_metric_1", "cv_value_1", "cv_metric_2", "cv_value_2", "root_state")
+table_s5_cols <- c("family_label", "mode", "model", "AICc", "delta_AICc", "model_weight", "n_species", "equations")
+
+page_css <- '
     :root { --ink:#241d17; --muted:#66584a; --line:#d9ccbf; --accent:#7a3e1d; --paper:#fffdfa; }
     html, body { margin: 0; padding: 0; background: #f7f3ee; color: var(--ink); }
     body { font: 16px/1.65 Georgia, serif; }
@@ -897,70 +923,229 @@ html <- sprintf(
     .links { margin: 18px 0 8px; }
     .links a { display: inline-block; margin: 0 10px 10px 0; color: var(--accent); text-decoration: none; border-bottom: 1px solid #ccb39e; }
     .figure { margin: 30px 0 36px; }
-    .figure img { width: 100%%; height: auto; display: block; border: 1px solid var(--line); background: white; }
+    .figure img { width: 100%; height: auto; display: block; border: 1px solid var(--line); background: white; }
     .figcaption { margin-top: 10px; font-size: 0.93rem; color: #43372d; }
     .table-wrap { overflow-x: auto; margin: 12px 0 24px; }
-    table { width: 100%%; border-collapse: collapse; }
+    table { width: 100%; border-collapse: collapse; }
     th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; font-size: 0.9rem; }
     th { font-size: 0.82rem; letter-spacing: 0.03em; text-transform: uppercase; color: var(--muted); }
     .note { color: var(--muted); font-size: 0.92rem; }
     .mono { font-family: "SFMono-Regular", Menlo, Consolas, monospace; font-size: 0.9em; }
-  </style>
+'
+
+write_table_page <- function(title, subtitle, df, cols, outfile) {
+  html <- sprintf(
+'<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>%s</title>
+  <style>%s</style>
 </head>
 <body>
   <main>
     <header>
-      <div class="eyebrow">Integrated Comparative Reconstruction</div>
-      <h1>Full-node phylogenetic integration across genome, morphology, TE, ectopic recombination, LTR history, and organismal traits</h1>
-      <p class="subhead">Current bg-clean CellProfiler summaries merged with the broader Desmognathus trait workspace and extended with phylogenetic filling</p>
+      <div class="eyebrow">Manuscript Table Export</div>
+      <h1>%s</h1>
+      <p class="subhead">%s</p>
+    </header>
+    <section class="table-wrap">
+      <table>
+        <tr>%s</tr>
+        %s
+      </table>
+    </section>
+  </main>
+</body>
+</html>',
+    html_escape(title),
+    page_css,
+    html_escape(title),
+    html_escape(subtitle),
+    paste(sprintf("<th>%s</th>", html_escape(cols)), collapse = ""),
+    if (nrow(df)) table_rows(df[, cols, drop = FALSE], cols) else ""
+  )
+  writeLines(html, outfile)
+}
+
+write.csv(observed_best_model_html[, table_1_cols, drop = FALSE], file.path(output_dir, "table_1_observed_best_models.csv"), row.names = FALSE)
+write.csv(observed_best_coeff_html[, table_2_cols, drop = FALSE], file.path(output_dir, "table_2_observed_best_coefficients.csv"), row.names = FALSE)
+write.csv(observed_panel_html[, table_3_cols, drop = FALSE], file.path(output_dir, "table_3_observed_panel_sizes.csv"), row.names = FALSE)
+write.csv(phylofill_best_model_html[, table_1_cols, drop = FALSE], file.path(output_dir, "table_s1_phylofill_best_models.csv"), row.names = FALSE)
+write.csv(phylofill_best_coeff_html[, table_2_cols, drop = FALSE], file.path(output_dir, "table_s2_phylofill_best_coefficients.csv"), row.names = FALSE)
+write.csv(imputation_html[, table_s3_cols, drop = FALSE], file.path(output_dir, "table_s3_imputation_summary.csv"), row.names = FALSE)
+write.csv(panel_html[, c("family_label", "mode", "n_species", "species_list"), drop = FALSE], file.path(output_dir, "table_s4_panel_sizes_all_modes.csv"), row.names = FALSE)
+write.csv(best_model_html[, table_s5_cols, drop = FALSE], file.path(output_dir, "table_s5_best_models_all_modes.csv"), row.names = FALSE)
+
+write_table_page("Table 1. Observed-only best path models", "Primary manuscript table for the complete-taxon observed-only analysis.", observed_best_model_html, table_1_cols, file.path(output_dir, "table_1_observed_best_models.html"))
+write_table_page("Table 2. Observed-only path coefficients", "Primary manuscript coefficient table for observed-only best models.", observed_best_coeff_html, table_2_cols, file.path(output_dir, "table_2_observed_best_coefficients.html"))
+write_table_page("Table 3. Observed-only panel sizes", "Species overlap retained in the primary observed-only panels.", observed_panel_html, table_3_cols, file.path(output_dir, "table_3_observed_panel_sizes.html"))
+write_table_page("Table S1. Phylofilled best path models", "Supplementary robustness table for phylogenetically filled analyses.", phylofill_best_model_html, table_1_cols, file.path(output_dir, "table_s1_phylofill_best_models.html"))
+write_table_page("Table S2. Phylofilled path coefficients", "Supplementary coefficient table for best phylofilled models.", phylofill_best_coeff_html, table_2_cols, file.path(output_dir, "table_s2_phylofill_best_coefficients.html"))
+write_table_page("Table S3. Trait imputation summary", "Cross-validation and root-state summary for all imputed traits.", imputation_html, table_s3_cols, file.path(output_dir, "table_s3_imputation_summary.html"))
+write_table_page("Table S4. Panel sizes across observed and phylofilled modes", "Full panel overlap reference table.", panel_html, c("family_label", "mode", "n_species", "species_list"), file.path(output_dir, "table_s4_panel_sizes_all_modes.html"))
+write_table_page("Table S5. Best models across observed and phylofilled modes", "Observed-versus-phylofill comparison table.", best_model_html, table_s5_cols, file.path(output_dir, "table_s5_best_models_all_modes.html"))
+
+main_html <- sprintf(
+'<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Integrated Desmognathus Phylogenetic Path Report</title>
+  <style>%s</style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="eyebrow">Primary Manuscript Report</div>
+      <h1>Observed-only comparative path results on the complete Desmognathus taxon set</h1>
+      <p class="subhead">Primary results are restricted to directly observed measurements; phylogenetic filling and ancestral reconstructions are moved to the supplement.</p>
     </header>
 
     <section class="summary">
-      <p>This report integrates %d tree species across %d path-analysis families. Current bg-clean CellProfiler values replaced the legacy genome and morphology estimates for %d species, and missing values across the broader trait matrix were then filled phylogenetically so observed-only and phylofilled analyses could be compared side by side.</p>
-      <p class="note">Continuous traits were filled with Brownian-motion conditional expectations on the phylogeny and discrete traits were filled with phylogenetic distance-weighted state voting, while ancestral internal-node states were reconstructed separately for visualization.</p>
+      <p>This primary report covers %d species in the local backbone and treats observed-only analyses as the main inference layer. The genome-morphology panel now retains %d directly observed species, and the broader observed TE/LTR/ectopic panels retain %d to %d species depending on trait availability.</p>
+      <p class="note">Supplementary robustness outputs, including phylogenetic filling, ancestral reconstructions, and observed-versus-phylofill comparison figures, are in <a href="supplement.html">supplement.html</a>.</p>
       <div class="links">
         <a href="summary.json">summary json</a>
-        <a href="integrated_master_observed.csv">observed master</a>
-        <a href="integrated_master_phylofill.csv">phylofilled master</a>
-        <a href="trait_imputation_summary.csv">trait imputation summary</a>
-        <a href="panel_summary_observed_vs_phylofill.csv">panel summary</a>
-        <a href="path_model_best_models.csv">best model summary</a>
-        <a href="path_model_best_coefficients.csv">best coefficients</a>
+        <a href="analysis_tree_complete.nwk">analysis tree</a>
+        <a href="species_tree_coverage.csv">tree coverage</a>
+        <a href="table_1_observed_best_models.html">table 1 html</a>
+        <a href="table_1_observed_best_models.csv">table 1 csv</a>
+        <a href="table_2_observed_best_coefficients.html">table 2 html</a>
+        <a href="table_2_observed_best_coefficients.csv">table 2 csv</a>
+        <a href="table_3_observed_panel_sizes.html">table 3 html</a>
+        <a href="supplement.html">supplement</a>
       </div>
     </section>
 
     <section class="figure">
       <img src="figure_1_panel_coverage.png" alt="Panel coverage before and after phylogenetic filling">
-      <div class="figcaption"><strong>Figure 1.</strong> Species overlap in each major analysis family before and after phylogenetic filling. The observed-only mode uses only directly measured values, whereas the phylofilled mode retains observed values and supplements missing traits with phylogenetically inferred tip estimates.</div>
+      <div class="figcaption"><strong>Figure 1.</strong> Species overlap in each major analysis family before and after phylogenetic filling. The observed-only mode defines the primary manuscript analyses; the phylofilled mode is retained for robustness.</div>
+    </section>
+
+    <section>
+      <h2>Table 1. Observed-only Best Path Models</h2>
+      <div class="table-wrap">
+        <table>
+          <tr><th>Family</th><th>Best model</th><th>Species</th><th>AICc</th><th>Weight</th><th>Equations</th></tr>
+          %s
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>Table 2. Observed-only Path Coefficients</h2>
+      <div class="table-wrap">
+        <table>
+          <tr><th>Family</th><th>Edge</th><th>Estimate</th><th>Std. error</th><th>95%% CI</th><th>P value</th><th>Lambda</th></tr>
+          %s
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>Table 3. Observed-only Panel Sizes</h2>
+      <div class="table-wrap">
+        <table>
+          <tr><th>Family</th><th>Species</th><th>Species list</th></tr>
+          %s
+        </table>
+      </div>
+    </section>
+  </main>
+</body>
+</html>',
+  page_css,
+  nrow(master_df),
+  max(observed_panel_html$n_species),
+  min(observed_panel_html$n_species),
+  max(observed_panel_html$n_species),
+  if (nrow(observed_best_model_html)) table_rows(observed_best_model_html[, table_1_cols, drop = FALSE], table_1_cols) else "",
+  if (nrow(observed_best_coeff_html)) table_rows(observed_best_coeff_html[, table_2_cols, drop = FALSE], table_2_cols) else "",
+  if (nrow(observed_panel_html)) table_rows(observed_panel_html[, table_3_cols, drop = FALSE], table_3_cols) else ""
+)
+
+supplement_html <- sprintf(
+'<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Integrated Desmognathus Supplement</title>
+  <style>%s</style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="eyebrow">Supplementary Robustness Report</div>
+      <h1>Phylogenetic filling, ancestral reconstruction, and cross-mode robustness</h1>
+      <p class="subhead">Supplement to the observed-only main report for the complete-taxon integrated analysis.</p>
+    </header>
+
+    <section class="summary">
+      <p>The supplementary analysis expands every family to %d species by filling missing tip traits phylogenetically and reconstructing internal-node states for visualization. These outputs are intended for robustness checks and evolutionary context rather than as the primary inferential layer.</p>
+      <p class="note">Return to the main report at <a href="index.html">index.html</a>.</p>
+      <div class="links">
+        <a href="index.html">main report</a>
+        <a href="integrated_master_phylofill.csv">phylofilled master</a>
+        <a href="trait_imputation_summary.csv">raw imputation summary</a>
+        <a href="table_s1_phylofill_best_models.html">table S1 html</a>
+        <a href="table_s2_phylofill_best_coefficients.html">table S2 html</a>
+        <a href="table_s3_imputation_summary.html">table S3 html</a>
+        <a href="table_s4_panel_sizes_all_modes.html">table S4 html</a>
+        <a href="table_s5_best_models_all_modes.html">table S5 html</a>
+      </div>
     </section>
 
     <section class="figure">
       <img src="figure_2_trait_status_heatmap.png" alt="Trait coverage heatmap">
-      <div class="figcaption"><strong>Figure 2.</strong> Trait availability matrix across the full salamander backbone. Each tile indicates whether a given species-trait combination was directly observed, phylogenetically filled, or still unavailable.</div>
+      <div class="figcaption"><strong>Figure S1.</strong> Trait availability matrix across the full salamander backbone. Tiles distinguish directly observed values from phylogenetically filled values.</div>
     </section>
 
     <section class="figure">
       <img src="figure_3_continuous_trait_ancestry.png" alt="Continuous trait ancestry maps">
-      <div class="figcaption"><strong>Figure 3.</strong> Continuous-trait ancestral reconstructions across the phylogeny for representative morphology, genome, TE, ectopic, and body-size traits after tip filling.</div>
+      <div class="figcaption"><strong>Figure S2.</strong> Continuous-trait ancestral reconstructions across the phylogeny for representative morphology, genome, TE, ectopic, and body-size traits after tip filling.</div>
     </section>
 
     <section class="figure">
       <img src="figure_4_discrete_trait_ancestry.png" alt="Discrete trait ancestral reconstructions">
-      <div class="figcaption"><strong>Figure 4.</strong> Ancestral-state reconstructions for discrete life-history and habitat traits. Tip colors show the final tip-state matrix used for filled analyses and node pies summarize marginal ancestral-state support.</div>
+      <div class="figcaption"><strong>Figure S3.</strong> Ancestral-state reconstructions for discrete development and microhabitat traits.</div>
     </section>
 
     <section class="figure">
       <img src="figure_5_best_model_support.png" alt="Best model support by family">
-      <div class="figcaption"><strong>Figure 5.</strong> Best-supported path model in each analysis family under observed-only and phylofilled datasets. Label text gives the winning model and the number of species retained in that family-mode combination.</div>
+      <div class="figcaption"><strong>Figure S4.</strong> Best-supported path model in each family under observed-only and phylofilled datasets.</div>
     </section>
 
     <section class="figure">
       <img src="figure_6_best_model_coefficients.png" alt="Best model coefficients across families">
-      <div class="figcaption"><strong>Figure 6.</strong> Standardized coefficients from the best-supported model in each family. Comparing observed-only and phylofilled estimates helps show whether the larger filled panels change the inferred direction or magnitude of the main paths.</div>
+      <div class="figcaption"><strong>Figure S5.</strong> Standardized best-model coefficients across observed-only and phylofilled families.</div>
     </section>
 
     <section>
-      <h2>Table 1. Trait Imputation Summary</h2>
+      <h2>Table S1. Phylofilled Best Path Models</h2>
+      <div class="table-wrap">
+        <table>
+          <tr><th>Family</th><th>Best model</th><th>Species</th><th>AICc</th><th>Weight</th><th>Equations</th></tr>
+          %s
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>Table S2. Phylofilled Path Coefficients</h2>
+      <div class="table-wrap">
+        <table>
+          <tr><th>Family</th><th>Edge</th><th>Estimate</th><th>Std. error</th><th>95%% CI</th><th>P value</th><th>Lambda</th></tr>
+          %s
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>Table S3. Trait Imputation Summary</h2>
       <div class="table-wrap">
         <table>
           <tr><th>Trait</th><th>Type</th><th>Observed</th><th>Imputed</th><th>Total</th><th>CV metric 1</th><th>Value</th><th>CV metric 2</th><th>Value</th><th>Root state</th></tr>
@@ -970,7 +1155,7 @@ html <- sprintf(
     </section>
 
     <section>
-      <h2>Table 2. Panel Sizes</h2>
+      <h2>Table S4. Panel Sizes Across Modes</h2>
       <div class="table-wrap">
         <table>
           <tr><th>Family</th><th>Mode</th><th>Species</th><th>Species list</th></tr>
@@ -980,7 +1165,7 @@ html <- sprintf(
     </section>
 
     <section>
-      <h2>Table 3. Best Path Model Per Family</h2>
+      <h2>Table S5. Best Models Across Observed and Phylofilled Modes</h2>
       <div class="table-wrap">
         <table>
           <tr><th>Family</th><th>Mode</th><th>Best model</th><th>AICc</th><th>Delta AICc</th><th>Weight</th><th>Species</th><th>Equations</th></tr>
@@ -991,13 +1176,16 @@ html <- sprintf(
   </main>
 </body>
 </html>',
-  nrow(master_df),
-  length(family_configs),
-  sum(master_df$current_cellprofiler_bridge, na.rm = TRUE),
-  table_rows(imputation_html[, c("label", "type", "observed_n", "imputed_n", "total_n", "cv_metric_1", "cv_value_1", "cv_metric_2", "cv_value_2", "root_state"), drop = FALSE], c("label", "type", "observed_n", "imputed_n", "total_n", "cv_metric_1", "cv_value_1", "cv_metric_2", "cv_value_2", "root_state")),
-  table_rows(panel_html[, c("family_label", "mode", "n_species", "species_list"), drop = FALSE], c("family_label", "mode", "n_species", "species_list")),
-  if (nrow(best_model_html)) table_rows(best_model_html[, c("family_label", "mode", "model", "AICc", "delta_AICc", "model_weight", "n_species", "equations"), drop = FALSE], c("family_label", "mode", "model", "AICc", "delta_AICc", "model_weight", "n_species", "equations")) else ""
+  page_css,
+  max(phylofill_panel_html$n_species),
+  if (nrow(phylofill_best_model_html)) table_rows(phylofill_best_model_html[, table_1_cols, drop = FALSE], table_1_cols) else "",
+  if (nrow(phylofill_best_coeff_html)) table_rows(phylofill_best_coeff_html[, table_2_cols, drop = FALSE], table_2_cols) else "",
+  if (nrow(imputation_html)) table_rows(imputation_html[, table_s3_cols, drop = FALSE], table_s3_cols) else "",
+  if (nrow(panel_html)) table_rows(panel_html[, c("family_label", "mode", "n_species", "species_list"), drop = FALSE], c("family_label", "mode", "n_species", "species_list")) else "",
+  if (nrow(best_model_html)) table_rows(best_model_html[, table_s5_cols, drop = FALSE], table_s5_cols) else ""
 )
 
-writeLines(html, file.path(output_dir, "index.html"))
-message("Wrote integrated multi-node report: ", file.path(output_dir, "index.html"))
+writeLines(main_html, file.path(output_dir, "index.html"))
+writeLines(supplement_html, file.path(output_dir, "supplement.html"))
+message("Wrote integrated multi-node main report: ", file.path(output_dir, "index.html"))
+message("Wrote integrated multi-node supplement: ", file.path(output_dir, "supplement.html"))
